@@ -1,10 +1,12 @@
-"""Transcription backends: faster-whisper locally, Groq/OpenAI in the cloud.
+"""Transcription backends: Parakeet v3 (ONNX) locally, Groq/OpenAI in the cloud.
 
 All backends return a unified list of word dicts: {text, start, end}.
 """
 from __future__ import annotations
 
 import os
+import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol
@@ -40,6 +42,166 @@ class Backend(Protocol):
     def available(self) -> bool: ...
 
     def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult: ...
+
+
+# --- local Parakeet v3 via onnx-asr ------------------------------------------
+
+SR = 16000            # Parakeet's expected sample rate
+SLICE_LEN = 28.0      # stay under the model's ~30s context window
+SLICE_STEP = 27.5     # 0.5s overlap between slices; overlap words are deduped
+
+def _ensure_wav(audio_path: Path) -> Path:
+    """Convert any audio to 16 kHz mono WAV (Parakeet's expected input)."""
+    tmp_dir = Path(tempfile.mkdtemp(prefix="refrain_wav_", dir=cfg.DATA_DIR))
+    out = tmp_dir / "input.wav"
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-i", str(audio_path), "-ac", "1", "-ar", str(SR), str(out)],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0 or not out.exists():
+        raise TranscribeError(f"ffmpeg WAV conversion failed: {proc.stderr[-300:]}")
+    return out
+
+
+def _read_wav(path: Path):
+    """Read 16 kHz mono PCM-16 WAV into a normalized float32 numpy array."""
+    import wave
+    import numpy as np
+    with wave.open(str(path), "rb") as w:
+        assert w.getframerate() == SR and w.getnchannels() == 1
+        raw = w.readframes(w.getnframes())
+    return np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def _merge_subwords(tokens: list[str], timestamps: list[float]) -> list[dict]:
+    """Merge Parakeet subword tokens (' qu', 'ick') into words.
+
+    A token beginning with a space starts a new word; token start times double
+    as the previous word's end time. Returns [{text, start, end}].
+    """
+    words: list[dict] = []
+    buf: str | None = None
+    buf_start = 0.0
+    for tok, ts in zip(tokens, timestamps):
+        if tok.startswith(" "):
+            if buf:
+                words.append({"text": buf, "start": buf_start,
+                              "end": max(ts, buf_start + 0.05)})
+            buf = tok.strip()
+            buf_start = float(ts)
+        else:
+            buf = (buf or "") + tok
+    if buf:
+        last_ts = float(timestamps[-1]) if timestamps else buf_start
+        words.append({"text": buf, "start": buf_start,
+                      "end": max(last_ts + 0.25, buf_start + 0.05)})
+    return words
+
+
+class ParakeetLocal:
+    """NVIDIA Parakeet TDT 0.6B v3 (multilingual) via onnx-asr ONNX runtime.
+
+    Songs are recognized with fixed overlapping windows (<= 28s each, under
+    the model's context limit), offset-corrected to absolute time, with words
+    from the overlap zone deduplicated. (Silero VAD was evaluated and dropped:
+    it fails to fire on vocals over music, while plain slicing transcribes
+    songs cleanly.)
+    """
+
+    name = "parakeet"
+
+    def __init__(self) -> None:
+        self._model = None
+
+    def available(self) -> bool:
+        try:
+            import onnx_asr  # noqa: F401
+            return True
+        except ImportError:
+            return False
+
+    def _load(self):
+        if self._model is None:
+            import onnx_asr
+            self._model = onnx_asr.load_model(cfg.PARAKEET_MODEL)
+        return self._model
+
+    def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult:
+        wav = _ensure_wav(audio_path)
+        try:
+            progress("Loading Parakeet v3 (first run downloads the model)…")
+            model = self._load()
+            progress("Transcribing locally with Parakeet v3…")
+            waveform = _read_wav(wav)
+            duration = len(waveform) / SR
+
+            words: list[dict] = []
+            starts = _slice_starts(duration)
+            for i, cs in enumerate(starts):
+                if len(starts) > 1:
+                    progress(f"Transcribing {i + 1}/{len(starts)}…")
+                sl = waveform[int(cs * SR):int((cs + SLICE_LEN) * SR)]
+                words += self._recognize_slice(model, sl, cs)
+            words = _dedupe_overlap(words)
+
+            if not words:
+                raise TranscribeError(
+                    "No vocals detected — this track appears to be instrumental")
+            return TranscriptionResult(segments=[], words=words, backend=self.name)
+        finally:
+            wav.unlink(missing_ok=True)
+            try:
+                wav.parent.rmdir()
+            except OSError:
+                pass
+
+    def _recognize_slice(self, model, slice_waveform, offset: float) -> list[dict]:
+        try:
+            res = model.with_timestamps().recognize(slice_waveform, sample_rate=SR)
+        except Exception:
+            return []
+        toks = list(res.tokens)
+        tss = [float(t) + offset for t in res.timestamps]
+        return _merge_subwords(toks, tss)
+
+
+def _slice_starts(duration: float) -> list[float]:
+    """Window starts covering the whole duration (last tile may overlap)."""
+    if duration <= SLICE_LEN:
+        return [0.0]
+    starts = [round(s, 2) for s in
+              _frange(0.0, duration - SLICE_LEN + 0.01, SLICE_STEP)]
+    if starts and starts[-1] + SLICE_LEN < duration - 1.0:
+        starts.append(round(duration - SLICE_LEN, 2))
+    return starts
+
+
+def _frange(start: float, stop: float, step: float) -> list[float]:
+    out = []
+    v = start
+    while v < stop:
+        out.append(v)
+        v += step
+    return out
+
+
+def _dedupe_overlap(words: list[dict], tol: float = 0.4) -> list[dict]:
+    """Drop duplicate words produced by the 0.5s overlap between slices.
+
+    A word appearing again within `tol` seconds of the previous instance
+    (same text) is an overlap artifact. Words that merely start close but
+    differ in text are kept — that's normal singing.
+    """
+    words.sort(key=lambda w: (w["start"], w["end"]))
+    out: list[dict] = []
+    for w in words:
+        if out:
+            p = out[-1]
+            if (w["text"] == p["text"]
+                    and abs(w["start"] - p["start"]) <= tol):
+                continue
+        out.append(w)
+    return out
 
 
 # --- local faster-whisper ----------------------------------------------------
@@ -152,6 +314,7 @@ def _words_from_segments(segments: list[Segment]) -> list[dict]:
 
 def get_backends() -> list[Backend]:
     return [
+        ParakeetLocal(),
         OpenAICompatible("groq", "https://api.groq.com/openai/v1",
                          "GROQ_API_KEY", cfg.GROQ_MODEL),
         OpenAICompatible("openai", "https://api.openai.com/v1",

@@ -4,10 +4,13 @@ Paste a song link → get a karaoke-style synced transcript you can read along w
 then export as **LRC / SRT / VTT / TXT / JSON**.
 
 ```
-Spotify/YouTube URL ──▶ yt-dlp ──▶ audio (m4a) ──▶ Whisper (word timestamps)
-                                                        │
-                              synced player UI ◀── line assembly
-                              (web, local)          + exporters
+Spotify URL ──▶ sfotipy metadata ──▶ ytmusicapi match ──▶ yt-dlp ─┐
+YouTube URL ──────────────────────────────────────────▶ yt-dlp ─┤
+                                                                 ▼
+Parakeet v3 (ONNX, word timestamps) ◀── audio (m4a → 16 kHz WAV)
+                                                                 │
+                                  synced player UI ◀── line assembly
+                                  (web, local)          + exporters
 ```
 
 ## Quickstart
@@ -23,13 +26,19 @@ uvicorn app.server:app --reload
 
 Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
+> First local transcription downloads the Parakeet v3 ONNX model from Hugging
+> Face (a one-time ~2.4 GB fetch, cached afterwards).
+
 ## How it works
 
-1. **Download** — yt-dlp resolves the URL (its extractors handle Spotify page →
-   available audio source) and pulls best-quality audio, transcoded to m4a via ffmpeg.
+1. **Download** — Spotify URLs are resolved via **sfotipy** (canonical track
+   metadata from the Spotify page) then matched to a YouTube Music video with
+   **ytmusicapi** (duration-aware fallback included); YouTube and other URLs go
+   straight to yt-dlp. Audio is pulled as m4a via ffmpeg.
 2. **Transcribe** — backend priority when `TRANSCRIBE_BACKEND=auto`:
-   **Groq → OpenAI → local faster-whisper**. Cloud gives word timestamps in seconds;
-   local runs fully offline with `faster-whisper`.
+   **Parakeet v3 → Groq → OpenAI → faster-whisper**. Parakeet runs locally through
+   **onnx-asr** (~36× realtime on CPU, multilingual, word-level timestamps, no
+   PyTorch needed). Very long audio falls back to VAD-chunked recognition.
 3. **Align** — words are grouped into lines at silence gaps / length limits, so
    every line is karaoke-ready with per-word sweep.
 4. **Read along** — the player highlights the active line, sweeps each word green,
@@ -39,8 +48,8 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `TRANSCRIBE_BACKEND` | `auto` | `auto` / `groq` / `openai` / `local` |
-| `WHISPER_MODEL` | `base` | tiny / base / small / medium / large-v3 |
+| `TRANSCRIBE_BACKEND` | `auto` | `auto` / `parakeet` / `groq` / `openai` / `local` |
+| `PARAKEET_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | any onnx-asr-supported model name |
 | `GROQ_API_KEY` | — | free-tier fast transcription with word timestamps |
 | `OPENAI_API_KEY` | — | fallback cloud backend |
 | `YTDLP_COOKIES_FILE` | — | e.g. `cookies.txt` if yt-dlp gets blocked |

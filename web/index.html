@@ -136,9 +136,8 @@
 
   /* ---------- main ---------- */
   #main {
-    flex: 1; height: 100vh; overflow-y: auto;
+    flex: 1; height: 100vh; overflow: hidden;
     display: flex; flex-direction: column;
-    scroll-behavior: smooth;
   }
   #hero {
     padding: 34px 44px 20px;
@@ -208,10 +207,13 @@
   .export-btn:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ---------- lyrics ---------- */
+  #player { min-height: 0; }   /* flex child: must be shrinkable or lyrics never bound */
   #lyrics {
-    flex: 1;
+    flex: 1; min-height: 0;      /* allow the flex child to actually shrink */
     padding: 28px 44px 120px;
-    overflow-y: auto;
+    overflow-y: auto;            /* THE scroll container */
+    overscroll-behavior: contain;
+    scroll-behavior: smooth;
     mask-image: linear-gradient(to bottom, transparent 0, black 7%, black 88%, transparent 100%);
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 7%, black 88%, transparent 100%);
   }
@@ -258,8 +260,11 @@
 
   @media (max-width: 900px) {
     body { flex-direction: column; }
-    #sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
-    #main { height: auto; }
+    #sidebar {
+      width: 100%; height: auto; max-height: 45vh; overflow-y: auto;
+      border-right: none; border-bottom: 1px solid var(--line); flex: none;
+    }
+    #main { height: auto; flex: 1; min-height: 0; }
     #hero, #wave-wrap, #controls, #export-row, #lyrics { padding-left: 20px; padding-right: 20px; }
   }
 </style>
@@ -345,6 +350,7 @@ let currentData = null; // {lines:[{text,start,words:[...]}]}
 let peaks = null;       // waveform bar heights
 let lastManualScroll = 0;
 let pollTimer = null;
+let downXY = null;      // mousedown position for click-vs-drag detection
 
 const fmtTime = (s) => {
   if (!isFinite(s)) s = 0;
@@ -464,6 +470,9 @@ async function selectTrack(trackId) {
   audio.src = currentData.audioUrl;
   buildLyrics();
   buildWaveform();
+  lastManualScroll = 0;
+  const lyr = $("#lyrics");
+  if (lyr) lyr.scrollTop = 0;
   $("#main").scrollTo({ top: 0 });
 }
 
@@ -483,7 +492,18 @@ function buildLyrics() {
       span.dataset.end = w.end;
       div.appendChild(span);
     });
-    div.addEventListener("click", () => { audio.currentTime = line.start + 0.01; });
+    div.addEventListener("mousedown", (e) => { downXY = [e.clientX, e.clientY]; });
+    div.addEventListener("click", (e) => {
+      // ignore clicks that finish a text selection or a scroll-drag
+      const sel = window.getSelection && window.getSelection();
+      if (sel && sel.type === "Range") return;
+      if (downXY) {
+        const dx = e.clientX - downXY[0], dy = e.clientY - downXY[1];
+        if (dx * dx + dy * dy > 100) return;   // moved > ~10px: not a click
+      }
+      audio.currentTime = Math.max(0, line.start + 0.01);
+      if (audio.paused) audio.play().catch(() => {});
+    });
     wrap.appendChild(div);
   });
 }
@@ -517,7 +537,9 @@ function tickLyrics() {
       // gentle auto-scroll (respects manual scrolling for 4s)
       if (Date.now() - lastManualScroll > 4000 && !audio.paused) {
         const target = node.offsetTop - wrap.clientHeight / 2 + node.clientHeight / 2;
-        wrap.scrollTo({ top: target, behavior: "smooth" });
+        if (Math.abs(target - wrap.scrollTop) > 4) {
+          wrap.scrollTo({ top: target, behavior: "smooth" });
+        }
       }
     }
     // waveform progress + time labels
