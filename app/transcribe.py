@@ -101,11 +101,11 @@ def _merge_subwords(tokens: list[str], timestamps: list[float]) -> list[dict]:
 class ParakeetLocal:
     """NVIDIA Parakeet TDT 0.6B v3 (multilingual) via onnx-asr ONNX runtime.
 
-    Songs are recognized with fixed overlapping windows (<= 28s each, under
-    the model's context limit), offset-corrected to absolute time, with words
-    from the overlap zone deduplicated. (Silero VAD was evaluated and dropped:
-    it fails to fire on vocals over music, while plain slicing transcribes
-    songs cleanly.)
+    Whole-file recognition with word timestamps is the path — the TDT decoder
+    handles full songs far better than windowing (no boundary garbles, hears
+    quiet fade-out vocals). If a whole-file pass ever covers < 50% of a long
+    track (the silent-truncation failure mode), we retry with overlapping
+    windows as a fallback.
     """
 
     name = "parakeet"
@@ -131,18 +131,25 @@ class ParakeetLocal:
         try:
             progress("Loading Parakeet v3 (first run downloads the model)…")
             model = self._load()
-            progress("Transcribing locally with Parakeet v3…")
+            progress("Transcribing the whole file with Parakeet v3…")
             waveform = _read_wav(wav)
             duration = len(waveform) / SR
 
-            words: list[dict] = []
-            starts = _slice_starts(duration)
-            for i, cs in enumerate(starts):
-                if len(starts) > 1:
-                    progress(f"Transcribing {i + 1}/{len(starts)}…")
-                sl = waveform[int(cs * SR):int((cs + SLICE_LEN) * SR)]
-                words += self._recognize_slice(model, sl, cs)
-            words = _dedupe_overlap(words)
+            words = self._recognize_slice(model, waveform, 0.0)
+
+            # Safety net: if whole-file clearly under-covered a long track
+            # (silent truncation), fall back to overlapping windows.
+            if words and duration > 60.0:
+                covered = words[-1]["end"] - words[0]["start"]
+                if covered < 0.5 * duration:
+                    progress("Whole-file pass looked short — retrying in windows…")
+                    words = []
+                    starts = _slice_starts(duration)
+                    for i, cs in enumerate(starts):
+                        progress(f"Transcribing {i + 1}/{len(starts)}…")
+                        sl = waveform[int(cs * SR):int((cs + SLICE_LEN) * SR)]
+                        words += self._recognize_slice(model, sl, cs)
+                    words = _dedupe_overlap(words)
 
             if not words:
                 raise TranscribeError(
