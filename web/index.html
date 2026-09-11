@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Refrain — synced transcripts</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0e14;
+    --bg-soft: #11151f;
+    --panel: #151a26;
+    --panel-2: #1a2030;
+    --line: #232a3a;
+    --text: #e8ecf4;
+    --muted: #8a94a8;
+    --accent: #1ed760;
+    --accent-2: #4ade80;
+    --danger: #f87171;
+    --radius: 14px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    background:
+      radial-gradient(1200px 500px at 80% -10%, rgba(30,215,96,.08), transparent 60%),
+      radial-gradient(900px 500px at -10% 110%, rgba(74,222,128,.05), transparent 60%),
+      var(--bg);
+    color: var(--text);
+    display: flex;
+  }
+
+  /* ---------- sidebar ---------- */
+  #sidebar {
+    width: 340px; min-width: 300px;
+    border-right: 1px solid var(--line);
+    background: linear-gradient(180deg, var(--bg-soft), var(--bg));
+    display: flex; flex-direction: column;
+    padding: 20px 16px;
+    gap: 14px;
+    height: 100vh;
+  }
+  .logo { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
+  .logo-mark {
+    width: 34px; height: 34px; border-radius: 10px;
+    background: conic-gradient(from 210deg, var(--accent), #0ea5e9, var(--accent));
+    display: grid; place-items: center; font-size: 18px;
+  }
+  .logo h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
+  .logo span { color: var(--muted); font-weight: 500; font-size: 12px; display: block; }
+
+  form#new-job {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  input[type="url"] {
+    background: var(--panel-2);
+    border: 1px solid var(--line);
+    color: var(--text);
+    border-radius: 10px;
+    padding: 11px 12px;
+    font-size: 14px;
+    outline: none;
+    transition: border-color .15s;
+  }
+  input[type="url"]:focus { border-color: var(--accent); }
+  button.primary {
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #06220f;
+    border: none; border-radius: 10px;
+    padding: 11px 14px;
+    font-weight: 700; font-size: 14px;
+    cursor: pointer;
+    transition: transform .06s, filter .15s;
+  }
+  button.primary:hover { filter: brightness(1.07); }
+  button.primary:active { transform: scale(.98); }
+  button.primary:disabled { filter: grayscale(.6) brightness(.7); cursor: default; }
+
+  #job-card {
+    display: none;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 12px;
+    font-size: 13px;
+  }
+  #job-card .status-row { display: flex; align-items: center; gap: 8px; }
+  .spinner {
+    width: 14px; height: 14px; border-radius: 50%;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #job-card.error .spinner { display: none; }
+  #job-card.error .status-row::before { content: "✕"; color: var(--danger); font-weight: 800; }
+  #job-msg { color: var(--muted); margin-top: 6px; font-size: 12px; line-height: 1.4; }
+
+  #library { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
+  #library h2 {
+    font-size: 11px; text-transform: uppercase; letter-spacing: .12em;
+    color: var(--muted); padding: 4px 6px;
+  }
+  .track-card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 12px 12px;
+    cursor: pointer;
+    display: flex; align-items: center; gap: 10px;
+    transition: border-color .15s, background .15s;
+    position: relative;
+  }
+  .track-card:hover { border-color: #2f3950; background: var(--panel-2); }
+  .track-card.active { border-color: var(--accent); }
+  .track-art {
+    width: 42px; height: 42px; border-radius: 9px; flex: none;
+    background: linear-gradient(135deg, #223047, #17202f);
+    display: grid; place-items: center; font-size: 17px;
+  }
+  .track-meta { min-width: 0; flex: 1; }
+  .track-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-artist { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track-del {
+    background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 14px; padding: 6px; border-radius: 8px; opacity: 0; transition: opacity .15s;
+  }
+  .track-card:hover .track-del { opacity: 1; }
+  .track-del:hover { color: var(--danger); background: rgba(248,113,113,.1); }
+  .empty-lib { color: var(--muted); font-size: 13px; padding: 14px 8px; line-height: 1.5; }
+
+  /* ---------- main ---------- */
+  #main {
+    flex: 1; height: 100vh; overflow-y: auto;
+    display: flex; flex-direction: column;
+    scroll-behavior: smooth;
+  }
+  #hero {
+    padding: 34px 44px 20px;
+    display: flex; align-items: center; gap: 22px;
+  }
+  #hero-art {
+    width: 108px; height: 108px; border-radius: 20px;
+    background:
+      radial-gradient(circle at 30% 30%, rgba(30,215,96,.35), transparent 60%),
+      linear-gradient(135deg, #223047, #141b28);
+    display: grid; place-items: center; font-size: 44px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    flex: none;
+  }
+  #hero-meta h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }
+  #hero-meta p { color: var(--muted); margin-top: 4px; }
+  #hero-badges { display: flex; gap: 8px; margin-top: 12px; }
+  .badge {
+    font-size: 11px; font-weight: 600;
+    border: 1px solid var(--line); color: var(--muted);
+    padding: 3px 10px; border-radius: 999px;
+  }
+  .badge.green { color: var(--accent); border-color: rgba(30,215,96,.35); }
+
+  #wave-wrap { padding: 0 44px; }
+  #waveform {
+    width: 100%; height: 84px; display: block;
+    cursor: pointer; border-radius: 10px;
+  }
+  #time-row {
+    display: flex; justify-content: space-between;
+    color: var(--muted); font-size: 12px; padding: 6px 2px 0;
+    font-variant-numeric: tabular-nums;
+  }
+
+  #controls {
+    padding: 16px 44px 8px;
+    display: flex; align-items: center; gap: 14px;
+  }
+  .ctrl-btn {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 12px;
+    width: 44px; height: 44px; font-size: 16px; cursor: pointer;
+    transition: background .15s, border-color .15s, transform .06s;
+  }
+  .ctrl-btn:hover { background: var(--panel-2); border-color: #2f3950; }
+  .ctrl-btn:active { transform: scale(.95); }
+  #play-btn {
+    width: 52px; height: 52px; font-size: 19px;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color: #06220f; border: none;
+  }
+  .speed-group { display: flex; gap: 4px; margin-left: auto; }
+  .speed-btn {
+    background: none; border: 1px solid transparent; color: var(--muted);
+    border-radius: 8px; padding: 6px 9px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .speed-btn.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
+
+  #export-row { padding: 10px 44px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+  .export-btn {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 8px 16px; font-size: 12.5px; font-weight: 600; cursor: pointer;
+    transition: border-color .15s, color .15s;
+  }
+  .export-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ---------- lyrics ---------- */
+  #lyrics {
+    flex: 1;
+    padding: 28px 44px 120px;
+    overflow-y: auto;
+    mask-image: linear-gradient(to bottom, transparent 0, black 7%, black 88%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 7%, black 88%, transparent 100%);
+  }
+  .lyric-line {
+    font-size: 25px; font-weight: 700; letter-spacing: -0.02em;
+    color: #3d4557;
+    padding: 9px 0;
+    cursor: pointer;
+    transition: color .18s, transform .18s;
+    line-height: 1.3;
+    transform-origin: left center;
+  }
+  .lyric-line.past { color: #262d3d; }
+  .lyric-line:hover { color: #5a6579; }
+  .lyric-line.active {
+    color: var(--text);
+    transform: scale(1.02);
+  }
+  .lyric-line .word { transition: color .1s; }
+  .lyric-line.active .word.done { color: var(--accent-2); }
+  .lyric-line.active .word.singing {
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+  }
+
+  /* ---------- empty state ---------- */
+  #empty {
+    flex: 1; display: none;
+    flex-direction: column; align-items: center; justify-content: center;
+    gap: 14px; text-align: center; padding: 40px;
+  }
+  #empty .big { font-size: 64px; }
+  #empty h3 { font-size: 24px; font-weight: 800; letter-spacing: -0.02em; }
+  #empty p { color: var(--muted); max-width: 420px; line-height: 1.6; }
+  #empty code {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: 2px 8px; border-radius: 6px; font-size: 13px;
+  }
+
+  ::-webkit-scrollbar { width: 10px; }
+  ::-webkit-scrollbar-thumb { background: #232a3a; border-radius: 99px; border: 2px solid var(--bg); }
+  ::-webkit-scrollbar-track { background: transparent; }
+
+  @media (max-width: 900px) {
+    body { flex-direction: column; }
+    #sidebar { width: 100%; height: auto; border-right: none; border-bottom: 1px solid var(--line); }
+    #main { height: auto; }
+    #hero, #wave-wrap, #controls, #export-row, #lyrics { padding-left: 20px; padding-right: 20px; }
+  }
+</style>
+</head>
+<body>
+
+<aside id="sidebar">
+  <div class="logo">
+    <div class="logo-mark">♫</div>
+    <div><h1>Refrain</h1><span>song → synced transcript</span></div>
+  </div>
+
+  <form id="new-job">
+    <input type="url" id="url-input" placeholder="Paste a song link (Spotify, YouTube…)" required />
+    <button class="primary" type="submit" id="submit-btn">Transcribe →</button>
+  </form>
+
+  <div id="job-card">
+    <div class="status-row"><div class="spinner"></div><span id="job-status">Working…</span></div>
+    <div id="job-msg"></div>
+  </div>
+
+  <div id="library">
+    <h2>Library</h2>
+    <div id="track-list"></div>
+  </div>
+</aside>
+
+<main id="main">
+  <div id="empty">
+    <div class="big">🎧</div>
+    <h3>Nothing playing yet</h3>
+    <p>Paste a song URL in the sidebar. Refrain downloads the audio, transcribes it
+    with word-level timestamps, and gives you a karaoke-style player you can export
+    as <code>LRC</code>, <code>SRT</code>, <code>VTT</code>, <code>TXT</code> or <code>JSON</code>.</p>
+  </div>
+
+  <div id="player" style="display:none; flex:1; flex-direction:column;">
+    <div id="hero">
+      <div id="hero-art">♫</div>
+      <div id="hero-meta">
+        <h2 id="track-title">—</h2>
+        <p id="track-artist">—</p>
+        <div id="hero-badges">
+          <span class="badge green" id="badge-backend">transcribed</span>
+          <span class="badge" id="badge-lines">0 lines</span>
+        </div>
+      </div>
+    </div>
+
+    <div id="wave-wrap">
+      <canvas id="waveform" height="84"></canvas>
+      <div id="time-row"><span id="time-cur">0:00</span><span id="time-total">0:00</span></div>
+    </div>
+
+    <div id="controls">
+      <button class="ctrl-btn" id="rew-btn" title="Back 5s">⏪</button>
+      <button class="ctrl-btn" id="play-btn" title="Play / pause">▶</button>
+      <button class="ctrl-btn" id="fwd-btn" title="Forward 5s">⏩</button>
+      <div class="speed-group" id="speed-group"></div>
+    </div>
+
+    <div id="export-row">
+      <button class="export-btn" data-fmt="lrc">↓ LRC</button>
+      <button class="export-btn" data-fmt="srt">↓ SRT</button>
+      <button class="export-btn" data-fmt="vtt">↓ VTT</button>
+      <button class="export-btn" data-fmt="txt">↓ TXT</button>
+      <button class="export-btn" data-fmt="json">↓ JSON</button>
+    </div>
+
+    <div id="lyrics"></div>
+  </div>
+
+  <audio id="audio" preload="auto"></audio>
+</main>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+const audio = $("#audio");
+let tracks = [];
+let currentTrack = null;
+let currentData = null; // {lines:[{text,start,words:[...]}]}
+let peaks = null;       // waveform bar heights
+let lastManualScroll = 0;
+let pollTimer = null;
+
+const fmtTime = (s) => {
+  if (!isFinite(s)) s = 0;
+  const m = Math.floor(s / 60), sec = Math.floor(s % 60);
+  return `${m}:${String(sec).padStart(2, "0")}`;
+};
+
+/* ---------------- library ---------------- */
+async function refreshLibrary() {
+  const res = await fetch("/api/tracks");
+  tracks = await res.json();
+  renderLibrary();
+}
+
+function renderLibrary() {
+  const list = $("#track-list");
+  list.innerHTML = "";
+  if (!tracks.length) {
+    const d = document.createElement("div");
+    d.className = "empty-lib";
+    d.textContent = "No tracks yet — your finished transcripts will show up here.";
+    list.appendChild(d);
+    return;
+  }
+  for (const t of tracks) {
+    const card = document.createElement("div");
+    card.className = "track-card" + (currentTrack === t.id ? " active" : "");
+    card.innerHTML = `
+      <div class="track-art">♫</div>
+      <div class="track-meta">
+        <div class="track-title">${escapeHtml(t.title)}</div>
+        <div class="track-artist">${escapeHtml(t.artist)}${t.hasTranscript ? "" : " · no transcript"}</div>
+      </div>
+      <button class="track-del" title="Delete">🗑</button>`;
+    card.addEventListener("click", () => selectTrack(t.id));
+    card.querySelector(".track-del").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      if (!confirm(`Delete "${t.title}" and its files?`)) return;
+      await fetch(`/api/tracks/${t.id}`, { method: "DELETE" });
+      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; }
+      refreshLibrary();
+    });
+    list.appendChild(card);
+  }
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* ---------------- job submission ---------------- */
+$("#new-job").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const url = $("#url-input").value.trim();
+  if (!url) return;
+  const btn = $("#submit-btn");
+  btn.disabled = true;
+  try {
+    const res = await fetch("/api/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+    const job = await res.json();
+    if (res.status !== 200) throw new Error(job.detail || "Failed to queue job");
+    showJobCard({ status: job.status, message: job.message });
+    pollJob(job.id);
+    $("#url-input").value = "";
+  } catch (err) {
+    showJobCard({ status: "error", message: String(err.message || err) });
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+function showJobCard({ status, message }) {
+  const card = $("#job-card");
+  card.style.display = "block";
+  card.classList.toggle("error", status === "error");
+  const labels = {
+    queued: "Queued", downloading: "Downloading audio", transcribing: "Transcribing",
+    aligning: "Aligning lines", done: "Done", error: "Failed",
+  };
+  $("#job-status").textContent = labels[status] || status;
+  $("#job-msg").textContent = message || "";
+}
+
+function pollJob(jobId) {
+  clearInterval(pollTimer);
+  pollTimer = setInterval(async () => {
+    const res = await fetch(`/api/jobs/${jobId}`);
+    if (!res.ok) { clearInterval(pollTimer); return; }
+    const job = await res.json();
+    showJobCard(job);
+    if (job.status === "done" || job.status === "error") {
+      clearInterval(pollTimer);
+      await refreshLibrary();
+      if (job.status === "done" && job.trackId) selectTrack(job.trackId);
+      setTimeout(() => { $("#job-card").style.display = "none"; }, 4000);
+    }
+  }, 1000);
+}
+
+/* ---------------- track selection ---------------- */
+async function selectTrack(trackId) {
+  currentTrack = trackId;
+  renderLibrary();
+  const res = await fetch(`/api/tracks/${trackId}`);
+  if (!res.ok) return;
+  currentData = await res.json();
+  $("#empty").style.display = "none";
+  $("#player").style.display = "flex";
+  $("#track-title").textContent = currentData.title;
+  $("#track-artist").textContent = currentData.artist;
+  $("#badge-lines").textContent = `${currentData.lines.length} lines`;
+  $("#badge-backend").textContent = "transcribed";
+  audio.src = currentData.audioUrl;
+  buildLyrics();
+  buildWaveform();
+  $("#main").scrollTo({ top: 0 });
+}
+
+/* ---------------- lyrics ---------------- */
+function buildLyrics() {
+  const wrap = $("#lyrics");
+  wrap.innerHTML = "";
+  currentData.lines.forEach((line, idx) => {
+    const div = document.createElement("div");
+    div.className = "lyric-line";
+    div.dataset.idx = idx;
+    line.words.forEach((w) => {
+      const span = document.createElement("span");
+      span.className = "word";
+      span.textContent = w.text + " ";
+      span.dataset.start = w.start;
+      span.dataset.end = w.end;
+      div.appendChild(span);
+    });
+    div.addEventListener("click", () => { audio.currentTime = line.start + 0.01; });
+    wrap.appendChild(div);
+  });
+}
+
+function tickLyrics() {
+  if (currentData && currentData.lines.length) {
+    const t = audio.currentTime;
+    const lines = currentData.lines;
+    // find active line: last line with start <= t
+    let lo = 0, hi = lines.length - 1, active = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (lines[mid].start <= t) { active = mid; lo = mid + 1; } else { hi = mid - 1; }
+    }
+    const wrap = $("#lyrics");
+    const nodes = wrap.children;
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      n.classList.toggle("active", i === active);
+      n.classList.toggle("past", active !== -1 && i < active);
+    }
+    if (active !== -1) {
+      const line = lines[active];
+      const node = nodes[active];
+      // word-level karaoke sweep
+      for (const span of node.querySelectorAll(".word")) {
+        const ws = parseFloat(span.dataset.start), we = parseFloat(span.dataset.end);
+        span.classList.toggle("done", t >= we);
+        span.classList.toggle("singing", t >= ws && t < we);
+      }
+      // gentle auto-scroll (respects manual scrolling for 4s)
+      if (Date.now() - lastManualScroll > 4000 && !audio.paused) {
+        const target = node.offsetTop - wrap.clientHeight / 2 + node.clientHeight / 2;
+        wrap.scrollTo({ top: target, behavior: "smooth" });
+      }
+    }
+    // waveform progress + time labels
+    drawWaveProgress();
+    $("#time-cur").textContent = fmtTime(audio.currentTime);
+    $("#time-total").textContent = fmtTime(audio.duration);
+  }
+  requestAnimationFrame(tickLyrics);
+}
+requestAnimationFrame(tickLyrics);
+
+$("#lyrics").addEventListener("wheel", () => { lastManualScroll = Date.now(); }, { passive: true });
+$("#lyrics").addEventListener("touchmove", () => { lastManualScroll = Date.now(); }, { passive: true });
+
+/* ---------------- waveform ---------------- */
+async function buildWaveform() {
+  peaks = null;
+  const canvas = $("#waveform");
+  const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  try {
+    const resp = await fetch(currentData.audioUrl);
+    const buf = await resp.arrayBuffer();
+    const AC = window.AudioContext || window.webkitAudioContext;
+    const actx = new AC();
+    const audioBuf = await actx.decodeAudioData(buf);
+    actx.close();
+    const bars = 180;
+    const data = audioBuf.getChannelData(0);
+    const block = Math.floor(data.length / bars);
+    peaks = [];
+    for (let i = 0; i < bars; i++) {
+      let max = 0;
+      for (let j = 0; j < block; j += 40) {
+        const v = Math.abs(data[i * block + j]);
+        if (v > max) max = v;
+      }
+      peaks.push(max);
+    }
+    const norm = Math.max(...peaks) || 1;
+    peaks = peaks.map((p) => Math.max(0.06, p / norm));
+    drawWaveProgress();
+  } catch {
+    // waveform is decorative — fail silently
+  }
+}
+
+function drawWaveProgress() {
+  if (!peaks) return;
+  const canvas = $("#waveform");
+  const dpr = window.devicePixelRatio || 1;
+  const w = canvas.clientWidth, h = 84;
+  canvas.width = w * dpr; canvas.height = h * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const n = peaks.length;
+  const bw = w / n;
+  const progress = audio.duration ? audio.currentTime / audio.duration : 0;
+  for (let i = 0; i < n; i++) {
+    const bh = peaks[i] * (h - 8);
+    const x = i * bw, y = (h - bh) / 2;
+    const played = i / n <= progress;
+    if (played) {
+      const grad = ctx.createLinearGradient(0, y, 0, y + bh);
+      grad.addColorStop(0, "#1ed760");
+      grad.addColorStop(1, "#4ade80");
+      ctx.fillStyle = grad;
+    } else {
+      ctx.fillStyle = "#252d3f";
+    }
+    ctx.beginPath();
+    ctx.roundRect(x + bw * 0.18, y, bw * 0.64, Math.max(bh, 2), 2);
+    ctx.fill();
+  }
+}
+
+$("#waveform").addEventListener("click", (e) => {
+  if (!audio.duration) return;
+  const rect = e.target.getBoundingClientRect();
+  audio.currentTime = ((e.clientX - rect.left) / rect.width) * audio.duration;
+});
+
+/* ---------------- controls ---------------- */
+$("#play-btn").addEventListener("click", () => {
+  if (audio.paused) audio.play(); else audio.pause();
+});
+audio.addEventListener("play", () => $("#play-btn").textContent = "⏸");
+audio.addEventListener("pause", () => $("#play-btn").textContent = "▶");
+$("#rew-btn").addEventListener("click", () => audio.currentTime = Math.max(0, audio.currentTime - 5));
+$("#fwd-btn").addEventListener("click", () => audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5));
+
+const speeds = [0.75, 1, 1.25, 1.5];
+const sg = $("#speed-group");
+speeds.forEach((s) => {
+  const b = document.createElement("button");
+  b.className = "speed-btn" + (s === 1 ? " active" : "");
+  b.textContent = `${s}×`;
+  b.addEventListener("click", () => {
+    audio.playbackRate = s;
+    sg.querySelectorAll(".speed-btn").forEach((x) => x.classList.remove("active"));
+    b.classList.add("active");
+  });
+  sg.appendChild(b);
+});
+
+/* ---------------- exports ---------------- */
+document.querySelectorAll(".export-btn").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!currentTrack) return;
+    window.location.href = `/api/tracks/${currentTrack}/export?fmt=${btn.dataset.fmt}`;
+  });
+});
+
+/* ---------------- boot ---------------- */
+refreshLibrary();
+</script>
+</body>
+</html>
