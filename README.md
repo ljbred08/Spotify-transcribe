@@ -58,19 +58,62 @@ The **⚙ Models & backend** panel in the app (bottom of the sidebar) manages ev
 
 - **Download / delete** local ONNX models (stored under `data/models/<id>/`, so deleting
   is instant and safe)
-- **Pick the active model** — the Parakeet/Canary family via onnx-asr
+- **Pick the active model** — every English/multilingual onnx-asr model with word-timestamp
+  support (the whisper exports return no timestamps, so they can't drive karaoke)
 - **Pick the backend** — auto, local, Groq, or OpenAI
 
 Choices persist in `data/settings.json` and apply to the next job (no restart).
 
 | Model | Size | Good at |
 | --- | --- | --- |
-| `parakeet-v3` | ~2.4 GB | Best all-round, 25 languages, handles singing |
-| `parakeet-v2` | ~2.4 GB | English-only variant |
-| `canary-1b-flash` | ~2.6 GB | Spoken word (podcasts); weak on singing |
+| `parakeet-v3` | ~2.5 GB | Best all-round: fast TDT decoder, handles singing, 25 languages |
+| `parakeet-v2` | ~2.5 GB | English-only predecessor of v3 |
+| `parakeet-unified-en` | ~2.5 GB | Unified offline/streaming RNNT with built-in punctuation & capitalization (community export) |
+| `parakeet-ctc-0.6b` | ~2.5 GB | CTC decoder variant (English) |
+| `parakeet-rnnt-0.6b` | ~2.5 GB | RNN-T decoder variant (English) |
+| `canary-1b-v2` | ~4 GB | Largest Canary; spoken word — weak on singing |
+| `canary-1b-flash` | ~3.6 GB | Spoken word (podcasts); weak on singing |
 | `canary-180m-flash` | ~780 MB | Tiny + fast spoken word; weak on singing |
-| `parakeet-ctc-0.6b` | ~2.4 GB | CTC decoder variant (English) |
-| `gigaam-v3-rnnt` | ~1.6 GB | Russian |
+| `gigaam-multilingual-ctc` | ~900 MB | Compact multilingual CTC (70+ languages, best on CIS) |
+| `gigaam-multilingual-large-ctc` | ~2.3 GB | Large multilingual CTC (70+ languages) |
+
+Community exports without onnx-asr's standard layout (like `parakeet-unified-en`) are
+normalized automatically after download: graph files renamed, a `config.json` synthesized,
+and the vocab rebuilt from the authoritative token map (including the `<blk>` blank token
+and SentencePiece word-boundary markers the export strips).
+
+## Re-transcribing & versions
+
+Every track has a **↻ Re-transcribe** button in the player: re-run ASR on the *existing*
+audio with any downloaded model (pick it in the dropdown next to the button) — useful for
+A/B-ing models or upgrading when a better one lands. No re-download of the song.
+
+Each transcription run creates a **new version** (`v1`, `v2`, …) alongside the previous
+ones — nothing is overwritten, so a worse re-run can simply be rolled back. Version pills
+next to the button switch the active version; every export uses the active version.
+
+## LLM lyric formatting
+
+With [ollama](https://ollama.com) running, transcripts are auto-polished (punctuation,
+capitalization, sentence-aware line breaks) by a small local model — default `qwen2.5:3b`
+(`FORMATTER_MODEL` in `.env`, needs ~2 GB). Three safety tiers guarantee the words and
+timings are never corrupted by the LLM:
+
+1. chunk-level reformatting, verified word-by-word (order-preserving),
+2. per-phrase polish on timing-derived phrases (used when the model "recites" famous
+   songs from memory instead of copying — e.g. the rickroll),
+3. raw phrases, unchanged.
+
+Line breaks come from **word timings** (silence gaps), not from the LLM, so karaoke
+sweep stays in sync regardless of which tier produced a line. Toggle in the Models panel
+(`llm_format`); off = deterministic silence-gap splitting.
+
+## Configuration (`.env`)
+
+| Var | Default | Notes |
+| --- | --- | --- |
+| `TRANSCRIBE_BACKEND` | `auto` | `auto` / `parakeet` / `groq` / `openai` / `local` |
+| `APP_DATA_DIR` | `data` | where audio, transcripts, models, settings live |
 | `YTDLP_COOKIES_FILE` | — | e.g. `cookies.txt` if yt-dlp gets blocked |
 | `YTDLP_EXTRA` | — | extra yt-dlp flags, comma-separated |
 

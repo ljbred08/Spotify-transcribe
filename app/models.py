@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import threading
 import time
 import uuid
@@ -57,6 +58,11 @@ class Job:
     track_id: str | None = None
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
+    # "download" (default) or "retranscribe" (re-run ASR on existing audio)
+    kind: str = "download"
+    # per-job overrides for retranscribe jobs (None = use app settings)
+    retranscribe_backend: str | None = None
+    retranscribe_model: str | None = None
 
 
 class Store:
@@ -104,6 +110,9 @@ class Store:
                 message=j.get("message", ""), track_id=j.get("track_id"),
                 created_at=j.get("created_at", time.time()),
                 updated_at=j.get("updated_at", time.time()),
+                kind=j.get("kind", "download"),
+                retranscribe_backend=j.get("retranscribe_backend"),
+                retranscribe_model=j.get("retranscribe_model"),
             )
             self._jobs[job.id] = job
 
@@ -120,8 +129,13 @@ class Store:
                               encoding="utf-8")
 
     # -- jobs ---------------------------------------------------------------
-    def create_job(self, url: str) -> Job:
-        job = Job(id=uuid.uuid4().hex[:12], url=url)
+    def create_job(self, url: str, *, kind: str = "download",
+                   track_id: str | None = None,
+                   retranscribe_backend: str | None = None,
+                   retranscribe_model: str | None = None) -> Job:
+        job = Job(id=uuid.uuid4().hex[:12], url=url, kind=kind, track_id=track_id,
+                  retranscribe_backend=retranscribe_backend,
+                  retranscribe_model=retranscribe_model)
         with self._lock:
             self._jobs[job.id] = job
             self._queue.append(job.id)
@@ -177,8 +191,52 @@ class Store:
             self._save()
         return existed
 
-    # -- transcript persistence ----------------------------------------------
-    def save_transcript(self, track_id: str, lines: list[Line]) -> None:
+    # -- transcript persistence (versioned) ----------------------------------
+    def _transcript_dir(self, track_id: str) -> Path:
+        return cfg.DATA_DIR / "transcripts" / track_id
+
+    def _versions_index_path(self, track_id: str) -> Path:
+        return self._transcript_dir(track_id) / "versions.json"
+
+    def _migrate_legacy_transcript(self, track_id: str) -> None:
+        """Move a pre-versioning transcripts/<id>.json into v1 of the new layout."""
+        legacy = cfg.DATA_DIR / "transcripts" / f"{track_id}.json"
+        if not legacy.exists():
+            return
+        d = self._transcript_dir(track_id)
+        d.mkdir(parents=True, exist_ok=True)
+        target = d / "v1.json"
+        if not target.exists():
+            shutil.move(str(legacy), str(target))
+            self._write_versions_index(track_id, {
+                "active": 1,
+                "versions": [{"version": 1, "createdAt": time.time(),
+                              "backend": None, "note": "imported from pre-versioning format"}],
+            })
+        else:
+            legacy.unlink(missing_ok=True)
+
+    def _read_versions_index(self, track_id: str) -> dict | None:
+        p = self._versions_index_path(track_id)
+        if not p.exists():
+            return None
+        try:
+            return json.loads(p.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return None
+
+    def _write_versions_index(self, track_id: str, index: dict) -> None:
+        self._versions_index_path(track_id).write_text(
+            json.dumps(index, ensure_ascii=False, indent=1), encoding="utf-8")
+
+    def save_transcript(self, track_id: str, lines: list[Line],
+                        *, backend: str | None = None,
+                        note: str | None = None) -> int:
+        """Persist lines as a new version; it becomes the active one.
+
+        Returns the version number. Previous versions are kept so a bad
+        re-run can always be rolled back.
+        """
         payload = [
             {
                 "text": line.text,
@@ -190,12 +248,27 @@ class Store:
             }
             for line in lines
         ]
-        path = cfg.DATA_DIR / "transcripts" / f"{track_id}.json"
-        path.write_text(json.dumps(payload, ensure_ascii=False, indent=1),
-                        encoding="utf-8")
+        self._migrate_legacy_transcript(track_id)
+        d = self._transcript_dir(track_id)
+        d.mkdir(parents=True, exist_ok=True)
+        index = self._read_versions_index(track_id) or {"active": 0, "versions": []}
+        version = (max((v["version"] for v in index["versions"]), default=0)) + 1
+        (d / f"v{version}.json").write_text(
+            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        index["versions"].append({
+            "version": version, "createdAt": time.time(), "backend": backend,
+            "lines": len(lines), "note": note,
+        })
+        index["active"] = version
+        self._write_versions_index(track_id, index)
+        return version
 
     def load_transcript(self, track_id: str) -> list[Line] | None:
-        path = cfg.DATA_DIR / "transcripts" / f"{track_id}.json"
+        self._migrate_legacy_transcript(track_id)
+        index = self._read_versions_index(track_id)
+        if index is None:
+            return None
+        path = self._transcript_dir(track_id) / f"v{index.get('active', 0)}.json"
         if not path.exists():
             return None
         try:
@@ -212,6 +285,19 @@ class Store:
             )
             for l in raw
         ]
+
+    def list_versions(self, track_id: str) -> dict | None:
+        """The versions index for a track (None when it has no transcripts)."""
+        self._migrate_legacy_transcript(track_id)
+        return self._read_versions_index(track_id)
+
+    def activate_version(self, track_id: str, version: int) -> bool:
+        index = self._read_versions_index(track_id)
+        if not index or not any(v["version"] == version for v in index["versions"]):
+            return False
+        index["active"] = version
+        self._write_versions_index(track_id, index)
+        return True
 
     def audio_path(self, track_id: str) -> Path:
         return cfg.DATA_DIR / "audio" / f"{track_id}.m4a"

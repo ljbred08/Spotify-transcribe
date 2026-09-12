@@ -41,7 +41,8 @@ class Backend(Protocol):
 
     def available(self) -> bool: ...
 
-    def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult: ...
+    def transcribe(self, audio_path: Path, progress: ProgressFn,
+                   *, model_id: str | None = None) -> TranscriptionResult: ...
 
 
 # --- local Parakeet v3 via onnx-asr ------------------------------------------
@@ -130,20 +131,20 @@ class ParakeetLocal:
         else:
             self._models.pop(model_id, None)
 
-    def _resolve_model(self) -> "tuple[str, str]":
-        """Returns (model_id, hf_repo) honoring current settings."""
+    def _resolve_model(self, model_id: str | None = None) -> "tuple[str, str]":
+        """Returns (model_id, hf_repo): per-call override or current settings."""
         from app import model_manager as mm
         from app.settings import settings
-        model_id = settings.get()["model"]
-        spec = mm.get_spec(model_id)
+        mid = model_id or settings.get()["model"]
+        spec = mm.get_spec(mid)
         if spec is None:
             spec = mm.get_spec("parakeet-v3")
         assert spec is not None
         return spec.id, spec.repo
 
-    def _load(self, progress: ProgressFn):
+    def _load(self, progress: ProgressFn, model_id_override: str | None = None):
         from app import model_manager as mm
-        model_id, repo = self._resolve_model()
+        model_id, repo = self._resolve_model(model_id_override)
         if model_id in self._models:
             return model_id, self._models[model_id]
         if mm.is_downloaded(model_id):
@@ -151,15 +152,28 @@ class ParakeetLocal:
         else:
             spec = mm.get_spec(model_id)
             progress(f"Downloading {model_id} (~{spec.size_mb} MB, one-time)…")
+            if spec.needs_fixup:
+                # Repo can't go through onnx-asr's loader (no config.json):
+                # fetch the files directly, then normalize the layout.
+                from huggingface_hub import snapshot_download
+
+                snapshot_download(
+                    spec.repo,
+                    local_dir=str(mm.local_path(model_id)),
+                    allow_patterns=["*.onnx", "*.onnx.data", "vocab.txt", "tokenizer.model"],
+                    ignore_patterns=["*.int8*"],
+                )
+                mm.normalize_model_dir(model_id)
         import onnx_asr
         model = onnx_asr.load_model(repo, str(mm.local_path(model_id)))
         self._models[model_id] = model
         return model_id, model
 
-    def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult:
+    def transcribe(self, audio_path: Path, progress: ProgressFn,
+                   *, model_id: str | None = None) -> TranscriptionResult:
         wav = _ensure_wav(audio_path)
         try:
-            model_id, model = self._load(progress)
+            model_id, model = self._load(progress, model_id_override=model_id)
             progress(f"Transcribing the whole file with {model_id}…")
             waveform = _read_wav(wav)
             duration = len(waveform) / SR
@@ -273,7 +287,8 @@ class LocalWhisper:
         self._model_name = cfg.WHISPER_MODEL
         return self._model
 
-    def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult:
+    def transcribe(self, audio_path: Path, progress: ProgressFn,
+                   *, model_id: str | None = None) -> TranscriptionResult:
         progress(f"Loading whisper model '{cfg.WHISPER_MODEL}'…")
         model = self._load()
         progress("Transcribing locally (this can take a while)…")
@@ -305,7 +320,8 @@ class OpenAICompatible:
     def available(self) -> bool:
         return bool(self._api_key)
 
-    def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult:
+    def transcribe(self, audio_path: Path, progress: ProgressFn,
+                   *, model_id: str | None = None) -> TranscriptionResult:
         progress(f"Uploading audio to {self.name} ({self._model})…")
         headers = {"Authorization": f"Bearer {self._api_key}"}
         with audio_path.open("rb") as fh:
@@ -370,12 +386,26 @@ def get_backends() -> list[Backend]:
     ]
 
 
-def pick_backend() -> tuple[Backend | None, str]:
-    """Choose a backend honoring persisted settings; explain the choice."""
+def pick_backend(*, backend: str | None = None,
+                 model: str | None = None) -> tuple[Backend | None, str]:
+    """Choose a backend honoring persisted settings; explain the choice.
+
+    `backend`/`model` are per-job overrides (retranscribe): when `backend`
+    is given it takes precedence over the persisted preference; `model`
+    selects the local onnx-asr model for this run only.
+    """
     from app.settings import settings
-    pref = settings.get()["backend"]
+    pref = backend or settings.get()["backend"]
     backends = get_backends()
     by_name = {b.name: b for b in backends}
+    if model:
+        # Choosing a local model for one run implies the local backend;
+        # the model id itself is passed through to transcribe(), never
+        # written into the persisted settings.
+        from app import model_manager as mm
+        if mm.get_spec(model) is None:
+            return None, f"Unknown model '{model}'"
+        pref = "parakeet"
     if pref != "auto":
         b = by_name.get(pref)
         if not b:

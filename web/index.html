@@ -246,6 +246,22 @@
   .speed-btn.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
 
   #export-row { padding: 10px 44px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+
+  #retrans-row {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 0 44px 10px;
+  }
+  #re-model {
+    background: var(--panel); color: var(--text); border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 8px; font-size: 12px; max-width: 230px;
+  }
+  .ver-pill {
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+  }
+  .ver-pill:hover { border-color: #2f3950; color: var(--text); }
+  .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
+
   .export-btn {
     background: var(--panel); color: var(--text);
     border: 1px solid var(--line); border-radius: 999px;
@@ -351,6 +367,11 @@
         <option value="openai">OpenAI cloud</option>
       </select>
     </div>
+    <div class="backend-row">
+      <label for="llm-toggle" title="Format lyrics (punctuation, capitalization, line breaks) with a small local LLM">LLM lyric formatting</label>
+      <input type="checkbox" id="llm-toggle" style="accent-color: var(--accent)" />
+      <span id="llm-status" class="model-status"></span>
+    </div>
     <div id="models-list"></div>
   </details>
 </aside>
@@ -375,6 +396,12 @@
           <span class="badge" id="badge-lines">0 lines</span>
         </div>
       </div>
+    </div>
+
+    <div id="retrans-row">
+      <select id="re-model" title="Model for the next re-transcription"></select>
+      <button class="ctrl-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept">↻ Re-transcribe</button>
+      <span id="version-pills"></span>
     </div>
 
     <div id="wave-wrap">
@@ -413,6 +440,29 @@ let peaks = null;       // waveform bar heights
 let lastManualScroll = 0;
 let pollTimer = null;
 let downXY = null;      // mousedown position for click-vs-drag detection
+
+async function retranscribe() {
+  if (!currentTrack) return;
+  const btn = $("#re-btn");
+  const model = $("#re-model").value || null;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/tracks/${currentTrack}/retranscribe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    if (!res.ok) { throw new Error((await res.json()).detail || "failed"); }
+    const job = await res.json();
+    showJobCard({ status: job.status, message: "Queued" });
+    pollJob(job.id);
+  } catch (err) {
+    showJobCard({ status: "error", message: String(err.message || err) });
+  } finally {
+    btn.disabled = false;
+  }
+}
+$("#re-btn").addEventListener("click", retranscribe);
 
 const fmtTime = (s) => {
   if (!isFinite(s)) s = 0;
@@ -517,6 +567,55 @@ function pollJob(jobId) {
 }
 
 /* ---------------- track selection ---------------- */
+async function loadRetransModels() {
+  try {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    const models = data.models || data;
+    const sel = $("#re-model");
+    sel.innerHTML = "";
+    for (const m of models) {
+      if (!m.downloaded) continue;
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.id + (m.sizeOnDiskMb ? ` (${Math.round(m.sizeOnDiskMb / 1024 * 10) / 10} GB)` : "");
+      sel.appendChild(opt);
+    }
+  } catch { /* models panel has the error handling */ }
+}
+
+async function loadVersions(trackId) {
+  const wrap = $("#version-pills");
+  wrap.innerHTML = "";
+  try {
+    const res = await fetch(`/api/tracks/${trackId}/versions`);
+    if (!res.ok) return;
+    const idx = await res.json();
+    for (const v of idx.versions || []) {
+      const b = document.createElement("button");
+      b.className = "ver-pill" + (v.version === idx.active ? " active" : "");
+      b.textContent = `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`;
+      b.title = v.note || (v.backend ? `via ${v.backend}` : "")
+              + (v.lines ? ` — ${v.lines} lines` : "");
+      b.addEventListener("click", async () => {
+        if (v.version === idx.active) return;
+        await fetch(`/api/tracks/${trackId}/versions/${v.version}/activate`, { method: "POST" });
+        selectTrack(trackId);
+      });
+      wrap.appendChild(b);
+      if (v.version === idx.active) {
+        const badge = document.getElementById("badge-backend");
+        if (badge) badge.textContent = v.backend ? `via ${v.backend.split(":").pop()}` : "transcribed";
+      }
+      if (v.version === idx.active) {
+        $("#badge-lines").textContent = `${v.lines ?? currentData.lines.length} lines`;
+      }
+      const reBtn = $("#re-btn");
+      if (reBtn) reBtn.dataset.versions = String(idx.versions.length);
+    }
+  } catch { /* non-fatal */ }
+}
+
 async function selectTrack(trackId) {
   currentTrack = trackId;
   renderLibrary();
@@ -532,7 +631,10 @@ async function selectTrack(trackId) {
   audio.src = currentData.audioUrl;
   buildLyrics();
   buildWaveform();
+  loadVersions(trackId);
   lastManualScroll = 0;
+  lastActive = -1;
+  lastScrollTarget = -1;
   const lyr = $("#lyrics");
   if (lyr) lyr.scrollTop = 0;
   $("#main").scrollTo({ top: 0 });
@@ -570,42 +672,62 @@ function buildLyrics() {
   });
 }
 
+/* --- player tick: event-driven, no per-frame DOM writes ----------------
+   The jittered approach mutated every line's classList 60x/s and re-issued
+   scrollTo(smooth) every frame, cancelling/restarting the animation
+   mid-flight. Now the DOM is touched only when state CHANGES.             */
+let lastActive = -1;
+let lastScrollTarget = -1;
+
 function tickLyrics() {
   if (currentData && currentData.lines.length) {
     const t = audio.currentTime;
     const lines = currentData.lines;
-    // find active line: last line with start <= t
+    // binary search: active line = last line with start <= t
     let lo = 0, hi = lines.length - 1, active = -1;
     while (lo <= hi) {
       const mid = (lo + hi) >> 1;
       if (lines[mid].start <= t) { active = mid; lo = mid + 1; } else { hi = mid - 1; }
     }
-    const wrap = $("#lyrics");
-    const nodes = wrap.children;
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i];
-      n.classList.toggle("active", i === active);
-      n.classList.toggle("past", active !== -1 && i < active);
-    }
-    if (active !== -1) {
-      const line = lines[active];
-      const node = nodes[active];
-      // word-level karaoke sweep
-      for (const span of node.querySelectorAll(".word")) {
-        const ws = parseFloat(span.dataset.start), we = parseFloat(span.dataset.end);
-        span.classList.toggle("done", t >= we);
-        span.classList.toggle("singing", t >= ws && t < we);
+
+    // (1) DOM work only on line transitions
+    if (active !== lastActive) {
+      const wrap = $("#lyrics");
+      const nodes = wrap.children;
+      if (lastActive >= 0 && nodes[lastActive]) {
+        nodes[lastActive].classList.remove("active");
+        nodes[lastActive].querySelectorAll(".word.done, .word.singing")
+          .forEach((el) => el.classList.remove("done", "singing"));
       }
-      // gentle auto-scroll (respects manual scrolling for 4s)
-      if (Date.now() - lastManualScroll > 4000 && !audio.paused) {
-        const target = node.offsetTop - wrap.clientHeight / 2 + node.clientHeight / 2;
-        if (Math.abs(target - wrap.scrollTop) > 4) {
+      for (let i = 0; i < nodes.length; i++) {
+        nodes[i].classList.toggle("past", active !== -1 && i < active);
+        if (i === active) nodes[i].classList.add("active");
+      }
+      // (2) scroll once per line change, to a correctly-measured target
+      if (active !== -1 && Date.now() - lastManualScroll > 4000 && !audio.paused) {
+        const node = nodes[active];
+        const target = node.offsetTop - wrap.offsetTop
+          - (wrap.clientHeight - node.offsetHeight) / 2;
+        if (Math.abs(target - lastScrollTarget) > 2) {
           wrap.scrollTo({ top: target, behavior: "smooth" });
+          lastScrollTarget = target;
+        }
+      }
+      lastActive = active;
+    }
+
+    // (3) word sweep on the active line only (cheap: ~8 spans)
+    if (active !== -1) {
+      const node = $("#lyrics").children[active];
+      if (node) {
+        for (const span of node.querySelectorAll(".word")) {
+          const ws = +span.dataset.start, we = +span.dataset.end;
+          span.classList.toggle("done", t >= we);
+          span.classList.toggle("singing", t >= ws && t < we);
         }
       }
     }
-    // waveform progress + time labels
-    drawWaveProgress();
+
     $("#time-cur").textContent = fmtTime(audio.currentTime);
     $("#time-total").textContent = fmtTime(audio.duration);
   }
@@ -615,6 +737,9 @@ requestAnimationFrame(tickLyrics);
 
 $("#lyrics").addEventListener("wheel", () => { lastManualScroll = Date.now(); }, { passive: true });
 $("#lyrics").addEventListener("touchmove", () => { lastManualScroll = Date.now(); }, { passive: true });
+
+/* waveform repaints on a timer, not the animation frame */
+setInterval(() => { if (peaks && currentData) drawWaveProgress(); }, 250);
 
 /* ---------------- waveform ---------------- */
 async function buildWaveform() {
@@ -649,14 +774,19 @@ async function buildWaveform() {
   }
 }
 
+let lastWaveW = 0;
 function drawWaveProgress() {
   if (!peaks) return;
   const canvas = $("#waveform");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = 84;
-  canvas.width = w * dpr; canvas.height = h * dpr;
+  // resize the bitmap only when needed (resizing clears + reallocates)
+  if (canvas.width !== Math.round(w * dpr)) {
+    canvas.width = Math.round(w * dpr); canvas.height = h * dpr;
+    lastWaveW = w;
+  }
   const ctx = canvas.getContext("2d");
-  ctx.scale(dpr, dpr);
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const n = peaks.length;
   const bw = w / n;
   const progress = audio.duration ? audio.currentTime / audio.duration : 0;
@@ -721,7 +851,16 @@ async function refreshModels() {
   const data = await res.json();
   renderModels(data);
   const bs = $("#backend-select");
-  if (data.settings) bs.value = data.settings.backend;
+  if (data.settings) {
+    bs.value = data.settings.backend;
+    const t = $("#llm-toggle");
+    t.checked = !!data.settings.llm_format;
+    t.disabled = !data.settings.llmAvailable;
+    $("#llm-status").textContent = data.settings.llmAvailable
+      ? (data.settings.llm_format ? "" : "")
+      : "(ollama offline)";
+    $("#llm-status").className = "model-status" + (data.settings.llmAvailable ? "" : " err");
+  }
 }
 
 function renderModels(data) {
@@ -786,9 +925,15 @@ $("#backend-select").addEventListener("change", async (e) => {
     body: JSON.stringify({ backend: e.target.value }) });
 });
 
+$("#llm-toggle").addEventListener("change", async (e) => {
+  await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ llm_format: e.target.checked }) });
+});
+
 /* ---------------- boot ---------------- */
 refreshLibrary();
 refreshModels();
+loadRetransModels();
 </script>
 </body>
 </html>

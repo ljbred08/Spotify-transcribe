@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import app.config as cfg
-from app import exporters, model_manager, transcribe
+from app import exporters, formatter, model_manager, transcribe
 from app.models import JobStatus
 from app.pipeline import delete_track_files, pipeline, store
 from app.settings import settings
@@ -107,11 +107,54 @@ def remove_track(track_id: str):
     return {"ok": True}
 
 
+# --- retranscribe & transcript versions ---------------------------------------
+
+class RetranscribeIn(BaseModel):
+    backend: str | None = None   # auto | parakeet | groq | openai (None = settings)
+    model: str | None = None     # local model id for this run only
+
+
+@app.post("/api/tracks/{track_id}/retranscribe")
+def retranscribe_track(track_id: str, body: RetranscribeIn):
+    track = store.get_track(track_id)
+    if not track:
+        raise HTTPException(404, "track not found")
+    if not track.audio_file or not track.audio_file.exists():
+        raise HTTPException(409, "audio file missing — cannot retranscribe")
+    if body.model and model_manager.get_spec(body.model) is None:
+        raise HTTPException(400, f"unknown model '{body.model}'")
+    job = store.create_job(
+        track.url, kind="retranscribe", track_id=track_id,
+        retranscribe_backend=body.backend, retranscribe_model=body.model)
+    return {"id": job.id, "status": job.status.value, "message": job.message}
+
+
+@app.get("/api/tracks/{track_id}/versions")
+def list_versions(track_id: str):
+    if not store.get_track(track_id):
+        raise HTTPException(404, "track not found")
+    index = store.list_versions(track_id)
+    if index is None:
+        return {"active": None, "versions": []}
+    return index
+
+
+@app.post("/api/tracks/{track_id}/versions/{version}/activate")
+def activate_version(track_id: str, version: int):
+    if not store.get_track(track_id):
+        raise HTTPException(404, "track not found")
+    if not store.activate_version(track_id, version):
+        raise HTTPException(404, f"version {version} not found")
+    return {"ok": True, "active": version}
+
+
 # --- models & settings --------------------------------------------------------
 
 @app.get("/api/settings")
 def get_settings():
-    return settings.get()
+    data = settings.get()
+    data["llmAvailable"] = formatter.llm_available()
+    return data
 
 
 @app.put("/api/settings")

@@ -6,7 +6,7 @@ import threading
 
 import app.config as cfg
 
-_DEFAULTS = {"backend": "auto", "model": "parakeet-v3"}
+_DEFAULTS = {"backend": "auto", "model": "parakeet-v3", "llm_format": True}
 _VALID_BACKENDS = {"auto", "parakeet", "groq", "openai"}
 
 
@@ -43,6 +43,8 @@ class Settings:
                 self._data["backend"] = fields["backend"]
             if "model" in fields:
                 self._data["model"] = str(fields["model"])
+            if "llm_format" in fields:
+                self._data["llm_format"] = bool(fields["llm_format"])
             self._save()
             return dict(self._data)
 

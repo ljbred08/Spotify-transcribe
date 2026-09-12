@@ -11,19 +11,45 @@ from app.settings import Settings
 
 def test_catalog_has_known_models():
     ids = {s.id for s in mm.CATALOG}
-    assert "parakeet-v3" in ids
-    assert "canary-180m-flash" in ids
+    assert {"parakeet-v3", "canary-180m-flash", "parakeet-unified-en",
+            "gigaam-multilingual-ctc"} <= ids
+
+
+def test_catalog_repos_resolve_via_onnx_asr():
+    """Every catalog repo must be resolvable by onnx-asr (or need_fixup)."""
+    from onnx_asr.loader import create_asr_resolver
+    for spec in mm.CATALOG:
+        if spec.needs_fixup:
+            continue
+        resolver = create_asr_resolver(spec.repo)
+        resolver.resolve_config()  # hits HF for config.json (cached)
+
+
+def test_normalize_model_dir(tmp_path, monkeypatch):
+    monkeypatch.setattr(mm.cfg, "DATA_DIR", tmp_path)
+    d = mm.local_path("fake-custom")
+    d.mkdir(parents=True)
+    for name in ["encoder.onnx", "decoder_joint.onnx",
+                 "encoder.onnx.data", "vocab.txt"]:
+        (d / name).write_bytes(b"x")
+    mm.normalize_model_dir("fake-custom")
+    assert (d / "encoder-model.onnx").exists()
+    assert (d / "decoder_joint-model.onnx").exists()
+    # external data file keeps its original name (graph references it)
+    assert (d / "encoder.onnx.data").exists()
+    assert (d / "config.json").exists()
+    import json
+    assert json.loads((d / "config.json").read_text())["model_type"] == "nemo-conformer-rnnt"
 
 
 def test_downloaded_flag_matches_disk():
     # canary-180m-flash was downloaded during development
     assert mm.is_downloaded("canary-180m-flash") == mm.local_path("canary-180m-flash").exists()
-    assert not mm.is_downloaded("gigaam-v3-rnnt") or mm.local_path("gigaam-v3-rnnt").exists()
 
 
 def test_delete_missing_model_returns_false(tmp_path, monkeypatch):
     monkeypatch.setattr(mm.cfg, "DATA_DIR", tmp_path)
-    assert mm.delete_model("gigaam-v3-rnnt") is False
+    assert mm.delete_model("not-a-model") is False
 
 
 def test_settings_roundtrip(tmp_path, monkeypatch):
