@@ -156,6 +156,15 @@
     border: 1px solid var(--line); border-radius: 8px;
     padding: 6px 8px; font-size: 12.5px; outline: none;
   }
+  .backend-row input[type="text"] {
+    flex: 1; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 8px; font-size: 12.5px; outline: none; min-width: 0;
+  }
+  .backend-row input[type="text"]:focus { border-color: #2f3950; }
+  #llm-settings { padding-bottom: 4px; }
+  #llm-settings[disabled] { opacity: .6; }
+  #llm-hint { flex: 1; font-size: 11px; }
   #models-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
   .model-row {
     border: 1px solid var(--line); border-radius: 10px;
@@ -254,10 +263,14 @@
   #re-model {
     background: var(--panel); color: var(--text); border: 1px solid var(--line);
     border-radius: 8px; padding: 6px 8px; font-size: 12px; max-width: 230px;
+    min-width: 0; flex: 0 1 auto;
   }
+  #re-btn { white-space: nowrap; flex: none; }
+  #version-pills { display: inline-flex; gap: 6px; flex-wrap: wrap; min-width: 0; }
   .ver-pill {
     border: 1px solid var(--line); background: var(--panel); color: var(--muted);
     border-radius: 999px; padding: 3px 10px; font-size: 11px; cursor: pointer;
+    white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
   }
   .ver-pill:hover { border-color: #2f3950; color: var(--text); }
   .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
@@ -325,11 +338,34 @@
   @media (max-width: 900px) {
     body { flex-direction: column; }
     #sidebar {
-      width: 100%; height: auto; max-height: 45vh; overflow-y: auto;
+      width: 100%; height: auto; max-height: none;
       border-right: none; border-bottom: 1px solid var(--line); flex: none;
+      padding: 14px 14px 10px; gap: 10px;
     }
+    /* library flows inline: one scrollable page, no inner clipping */
+    #library { flex: none; overflow: visible; }
+    #track-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; }
+    /* models panel scrolls internally so it can't swallow the whole sidebar */
+    #models-panel { flex: none; }
+    #models-panel[open] { max-height: 40vh; overflow-y: auto; }
+
     #main { height: auto; flex: 1; min-height: 0; }
-    #hero, #wave-wrap, #controls, #export-row, #lyrics { padding-left: 20px; padding-right: 20px; }
+    #hero, #wave-wrap, #controls, #export-row, #retrans-row { padding-left: 16px; padding-right: 16px; }
+    #hero { padding-top: 18px; gap: 14px; }
+    #hero-art { width: 64px; height: 64px; font-size: 26px; border-radius: 14px; }
+    #hero-meta h2 { font-size: 22px; }
+    #retrans-row { padding-bottom: 6px; row-gap: 6px; }
+    #re-model { flex: 1 1 140px; max-width: none; }
+    #re-btn { flex: 1 0 auto; padding-left: 12px; padding-right: 12px; }
+    #controls { flex-wrap: wrap; gap: 10px; }
+    .lyric-line { font-size: 19px; }
+    #lyrics { padding-bottom: 60px; }
+    .export-btn { padding: 7px 12px; font-size: 11.5px; }
+  }
+  @media (max-width: 520px) {
+    #track-list { grid-template-columns: 1fr; }
+    .lyric-line { font-size: 17px; }
+    #hero-meta h2 { font-size: 19px; }
   }
 </style>
 </head>
@@ -371,6 +407,20 @@
       <label for="llm-toggle" title="Format lyrics (punctuation, capitalization, line breaks) with a small local LLM">LLM lyric formatting</label>
       <input type="checkbox" id="llm-toggle" style="accent-color: var(--accent)" />
       <span id="llm-status" class="model-status"></span>
+    </div>
+    <div id="llm-settings">
+      <div class="backend-row">
+        <label for="llm-url">Ollama URL</label>
+        <input type="text" id="llm-url" spellcheck="false" placeholder="http://127.0.0.1:11434" />
+      </div>
+      <div class="backend-row">
+        <label for="llm-model">Formatter model</label>
+        <select id="llm-model"></select>
+      </div>
+      <div class="backend-row">
+        <button class="model-btn" id="llm-refresh" type="button">Check connection</button>
+        <span id="llm-hint" class="model-sub"></span>
+      </div>
     </div>
     <div id="models-list"></div>
   </details>
@@ -855,13 +905,54 @@ async function refreshModels() {
   const bs = $("#backend-select");
   if (data.settings) {
     bs.value = data.settings.backend;
-    const t = $("#llm-toggle");
-    t.checked = !!data.settings.llm_format;
-    t.disabled = !data.settings.llmAvailable;
-    $("#llm-status").textContent = data.settings.llmAvailable
-      ? (data.settings.llm_format ? "" : "")
-      : "(ollama offline)";
-    $("#llm-status").className = "model-status" + (data.settings.llmAvailable ? "" : " err");
+    renderLlm(data.settings.llm || {}, !!data.settings.llm_format);
+  }
+}
+
+function renderLlm(llm, enabled) {
+  const t = $("#llm-toggle");
+  const status = $("#llm-status");
+  const ok = !!(llm.online && llm.installed);
+  t.checked = !!enabled;
+  t.disabled = !ok;
+  status.textContent = !llm.online ? "(offline)"
+    : !llm.installed ? `(model "${llm.model}" not pulled)`
+    : "";
+  status.className = "model-status" + (ok ? "" : " err");
+  if (document.activeElement !== $("#llm-url")) {
+    $("#llm-url").value = llm.url || "";
+  }
+  const sel = $("#llm-model");
+  const prev = sel.value;
+  sel.innerHTML = "";
+  for (const name of llm.models || []) {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  }
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+  else if (llm.model) {
+    // exact match first, else the entry the configured name starts with
+    const exact = [...sel.options].find(o => o.value === llm.model);
+    const prefix = [...sel.options].find(o => llm.model.startsWith(o.value));
+    if (exact) sel.value = exact.value;
+    else if (prefix) sel.value = prefix.value;
+    else if (sel.options.length) {
+      const opt = document.createElement("option");
+      opt.value = llm.model;
+      opt.textContent = llm.model + " (not pulled)";
+      sel.appendChild(opt);
+      sel.value = llm.model;
+    }
+  }
+  const hint = $("#llm-hint");
+  if (!llm.online) {
+    hint.textContent = "Install ollama and run: ollama serve";
+  } else if (!llm.installed) {
+    hint.textContent = `Run: ollama pull ${llm.model}`;
+  } else {
+    hint.textContent = "";
   }
 }
 
@@ -944,6 +1035,42 @@ $("#backend-select").addEventListener("change", async (e) => {
 $("#llm-toggle").addEventListener("change", async (e) => {
   await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ llm_format: e.target.checked }) });
+  refreshModels();
+});
+
+async function saveLlmSettings(patch) {
+  const res = await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch) });
+  const data = await res.json();
+  if (data.llm) renderLlm(data.llm, data.llm_format);
+  return data;
+}
+
+$("#llm-model").addEventListener("change", (e) => {
+  saveLlmSettings({ llm_model: e.target.value });
+});
+
+let llmUrlTimer = null;
+$("#llm-url").addEventListener("change", () => {
+  const val = $("#llm-url").value.trim();
+  if (val) saveLlmSettings({ llm_url: val });
+});
+$("#llm-url").addEventListener("input", () => {
+  clearTimeout(llmUrlTimer);
+  llmUrlTimer = setTimeout(() => {
+    const val = $("#llm-url").value.trim();
+    if (val) saveLlmSettings({ llm_url: val });
+  }, 900);
+});
+
+$("#llm-refresh").addEventListener("click", async () => {
+  const btn = $("#llm-refresh");
+  btn.disabled = true;
+  try {
+    await saveLlmSettings({ llm_url: $("#llm-url").value.trim() || undefined });
+  } finally {
+    btn.disabled = false;
+  }
 });
 
 /* ---------------- boot ---------------- */

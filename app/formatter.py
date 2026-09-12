@@ -17,11 +17,13 @@ import httpx
 
 from app.models import Line, Word
 
-OLLAMA_URL = os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434")
 # NOTE: LFM2.5-350M was evaluated and cannot do faithful copy-tasks (stops
 # after ~25 tokens, rewrites words). qwen2.5:3b is the smallest tested model
-# that reformats reliably; any chat model works via FORMATTER_MODEL.
-FORMATTER_MODEL = os.environ.get("FORMATTER_MODEL", "qwen2.5:3b")
+# that reformats reliably; any chat model works.
+# URL + model live in persisted settings (seeded from OLLAMA_URL /
+# FORMATTER_MODEL env on first run) and are editable in the UI.
+DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+DEFAULT_FORMATTER_MODEL = "qwen2.5:3b"
 CHUNK_WORDS = 80       # words per LLM request (keeps outputs short + reliable)
 MAX_LINE_CHARS = 52    # karaoke line length cap
 # words an LLM may legitimately add (stylistic connectives / ad-libs)
@@ -59,23 +61,61 @@ def _norm(tok: str) -> str:
     return re.sub(r"[^a-z0-9']", "", tok.lower())
 
 
+def _llm_config() -> "tuple[str, str]":
+    """(url, model) from persisted settings, falling back to env/defaults."""
+    try:
+        from app.settings import settings
+        s = settings.get()
+        return s.get("llm_url") or DEFAULT_OLLAMA_URL, \
+            s.get("llm_model") or DEFAULT_FORMATTER_MODEL
+    except Exception:
+        return DEFAULT_OLLAMA_URL, DEFAULT_FORMATTER_MODEL
+
+
+_status_cache: dict = {"at": 0.0, "data": None}
+_STATUS_TTL = 5.0  # seconds; ollama polling happens on every settings fetch
+
+
+def llm_status() -> dict:
+    """Reachability + the active config, for the UI's LLM section."""
+    url, model = _llm_config()
+    models: list[str] = []
+    online = False
+    try:
+        with httpx.Client(timeout=2.5) as c:
+            tags = c.get(f"{url}/api/tags").json()
+        models = sorted(m.get("name", "") for m in tags.get("models", []))
+        online = True
+    except Exception:
+        online = False
+    # exact or tag-prefix match ("qwen2.5:3b" also matches a listed "qwen2.5:3b-instruct")
+    installed = model in models or any(m.startswith(model) for m in models)
+    return {"url": url, "model": model, "online": online,
+            "installed": installed, "models": models}
+
+
+def llm_status_cached() -> dict:
+    import time
+    now = time.time()
+    if _status_cache["data"] is None or now - _status_cache["at"] > _STATUS_TTL:
+        _status_cache["data"] = llm_status()
+        _status_cache["at"] = now
+    return _status_cache["data"]
+
+
 def llm_available() -> bool:
     """True when the formatter model is reachable and pulled."""
-    try:
-        with httpx.Client(timeout=2.0) as c:
-            tags = c.get(f"{OLLAMA_URL}/api/tags").json()
-        names = {m.get("name", "") for m in tags.get("models", [])}
-        return any(n.startswith(FORMATTER_MODEL) for n in names)
-    except Exception:
-        return False
+    st = llm_status_cached()
+    return st["online"] and st["installed"]
 
 
 def _chat(chunk_text: str, *, phrase: bool = False) -> str | None:
     prompt = _PHRASE_PROMPT if phrase else _PROMPT
+    url, model = _llm_config()
     try:
         with httpx.Client(timeout=240.0) as c:
-            r = c.post(f"{OLLAMA_URL}/api/chat", json={
-                "model": FORMATTER_MODEL,
+            r = c.post(f"{url}/api/chat", json={
+                "model": model,
                 "messages": [{"role": "user", "content": prompt.format(
                     chunk=chunk_text, phrase=chunk_text)}],
                 "stream": False,

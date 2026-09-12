@@ -2,11 +2,19 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 
 import app.config as cfg
 
-_DEFAULTS = {"backend": "auto", "model": "parakeet-v3", "llm_format": True}
+_DEFAULTS = {
+    "backend": "auto",
+    "model": "parakeet-v3",
+    "llm_format": True,
+    # env vars seed the initial defaults; the UI can change them at runtime
+    "llm_url": os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
+    "llm_model": os.environ.get("FORMATTER_MODEL", "qwen2.5:3b"),
+}
 _VALID_BACKENDS = {"auto", "parakeet", "groq", "openai"}
 
 
@@ -45,6 +53,12 @@ class Settings:
                 self._data["model"] = str(fields["model"])
             if "llm_format" in fields:
                 self._data["llm_format"] = bool(fields["llm_format"])
+            for key in ("llm_url", "llm_model"):
+                if key in fields:
+                    val = str(fields[key]).strip()
+                    if not val:
+                        raise ValueError(f"{key} must be a non-empty string")
+                    self._data[key] = val
             self._save()
             return dict(self._data)
 

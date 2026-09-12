@@ -154,15 +154,22 @@ def activate_version(track_id: str, version: int):
 def get_settings():
     data = settings.get()
     data["llmAvailable"] = formatter.llm_available()
+    data["llm"] = formatter.llm_status_cached()
     return data
 
 
 @app.put("/api/settings")
 def update_settings(body: dict):
+    keys = ("backend", "model", "llm_format", "llm_url", "llm_model")
     try:
-        return settings.update(**{k: body[k] for k in ("backend", "model") if k in body})
+        out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
+    if "llm_url" in body or "llm_model" in body or body.get("check_llm"):
+        formatter._status_cache["at"] = 0.0  # invalidate availability cache
+    out["llmAvailable"] = formatter.llm_available()
+    out["llm"] = formatter.llm_status()
+    return out
 
 
 @app.get("/api/models")
@@ -171,7 +178,10 @@ def list_models():
     models = model_manager.list_models()
     for m in models:
         m["download"] = downloads.get(m["id"], {"status": "idle", "error": None})
-    return {"models": models, "settings": settings.get()}
+    data = settings.get()
+    data["llmAvailable"] = formatter.llm_available()
+    data["llm"] = formatter.llm_status_cached()
+    return {"models": models, "settings": data}
 
 
 @app.post("/api/models/{model_id}/download")
