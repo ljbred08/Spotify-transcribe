@@ -99,19 +99,23 @@ def _merge_subwords(tokens: list[str], timestamps: list[float]) -> list[dict]:
 
 
 class ParakeetLocal:
-    """NVIDIA Parakeet TDT 0.6B v3 (multilingual) via onnx-asr ONNX runtime.
+    """NVIDIA NeMo models via onnx-asr (Parakeet / Canary families).
 
     Whole-file recognition with word timestamps is the path — the TDT decoder
     handles full songs far better than windowing (no boundary garbles, hears
     quiet fade-out vocals). If a whole-file pass ever covers < 50% of a long
     track (the silent-truncation failure mode), we retry with overlapping
     windows as a fallback.
+
+    The active model comes from app settings at transcribe time; models load
+    from data/models/<id>/ and are cached per id (cache is invalidated on
+    delete via drop_cache).
     """
 
     name = "parakeet"
 
     def __init__(self) -> None:
-        self._model = None
+        self._models: dict[str, object] = {}
 
     def available(self) -> bool:
         try:
@@ -120,41 +124,72 @@ class ParakeetLocal:
         except ImportError:
             return False
 
-    def _load(self):
-        if self._model is None:
-            import onnx_asr
-            self._model = onnx_asr.load_model(cfg.PARAKEET_MODEL)
-        return self._model
+    def drop_cache(self, model_id: str | None = None) -> None:
+        if model_id is None:
+            self._models.clear()
+        else:
+            self._models.pop(model_id, None)
+
+    def _resolve_model(self) -> "tuple[str, str]":
+        """Returns (model_id, hf_repo) honoring current settings."""
+        from app import model_manager as mm
+        from app.settings import settings
+        model_id = settings.get()["model"]
+        spec = mm.get_spec(model_id)
+        if spec is None:
+            spec = mm.get_spec("parakeet-v3")
+        assert spec is not None
+        return spec.id, spec.repo
+
+    def _load(self, progress: ProgressFn):
+        from app import model_manager as mm
+        model_id, repo = self._resolve_model()
+        if model_id in self._models:
+            return model_id, self._models[model_id]
+        if mm.is_downloaded(model_id):
+            progress(f"Loading {model_id}…")
+        else:
+            spec = mm.get_spec(model_id)
+            progress(f"Downloading {model_id} (~{spec.size_mb} MB, one-time)…")
+        import onnx_asr
+        model = onnx_asr.load_model(repo, str(mm.local_path(model_id)))
+        self._models[model_id] = model
+        return model_id, model
 
     def transcribe(self, audio_path: Path, progress: ProgressFn) -> TranscriptionResult:
         wav = _ensure_wav(audio_path)
         try:
-            progress("Loading Parakeet v3 (first run downloads the model)…")
-            model = self._load()
-            progress("Transcribing the whole file with Parakeet v3…")
+            model_id, model = self._load(progress)
+            progress(f"Transcribing the whole file with {model_id}…")
             waveform = _read_wav(wav)
             duration = len(waveform) / SR
 
             words = self._recognize_slice(model, waveform, 0.0)
 
-            # Safety net: if whole-file clearly under-covered a long track
-            # (silent truncation), fall back to overlapping windows.
-            if words and duration > 60.0:
-                covered = words[-1]["end"] - words[0]["start"]
-                if covered < 0.5 * duration:
+            # Safety net: if whole-file yields nothing or clearly under-covers
+            # a long track (silent truncation, or a model whose effective max
+            # input is shorter — e.g. Canary's AED decoder), fall back to
+            # overlapping windows which work for every model.
+            coverage_ok = bool(words) and \
+                (words[-1]["end"] - words[0]["start"]) >= 0.5 * duration
+            if duration > 45.0 and not coverage_ok:
+                if words:
                     progress("Whole-file pass looked short — retrying in windows…")
-                    words = []
-                    starts = _slice_starts(duration)
-                    for i, cs in enumerate(starts):
-                        progress(f"Transcribing {i + 1}/{len(starts)}…")
-                        sl = waveform[int(cs * SR):int((cs + SLICE_LEN) * SR)]
-                        words += self._recognize_slice(model, sl, cs)
-                    words = _dedupe_overlap(words)
+                else:
+                    progress("Model needs shorter input — retrying in windows…")
+                words = []
+                starts = _slice_starts(duration)
+                for i, cs in enumerate(starts):
+                    progress(f"Transcribing {i + 1}/{len(starts)}…")
+                    sl = waveform[int(cs * SR):int((cs + SLICE_LEN) * SR)]
+                    words += self._recognize_slice(model, sl, cs)
+                words = _dedupe_overlap(words)
 
             if not words:
                 raise TranscribeError(
                     "No vocals detected — this track appears to be instrumental")
-            return TranscriptionResult(segments=[], words=words, backend=self.name)
+            return TranscriptionResult(segments=[], words=words,
+                                       backend=f"{self.name}:{model_id}")
         finally:
             wav.unlink(missing_ok=True)
             try:
@@ -167,7 +202,9 @@ class ParakeetLocal:
             res = model.with_timestamps().recognize(slice_waveform, sample_rate=SR)
         except Exception:
             return []
-        toks = list(res.tokens)
+        toks = list(res.tokens or [])
+        if not toks or res.timestamps is None:
+            return []  # model gave no timestamps (e.g. AED decoder over long input)
         tss = [float(t) + offset for t in res.timestamps]
         return _merge_subwords(toks, tss)
 
@@ -319,9 +356,12 @@ def _words_from_segments(segments: list[Segment]) -> list[dict]:
 
 # --- registry -----------------------------------------------------------------
 
+parakeet = ParakeetLocal()
+
+
 def get_backends() -> list[Backend]:
     return [
-        ParakeetLocal(),
+        parakeet,
         OpenAICompatible("groq", "https://api.groq.com/openai/v1",
                          "GROQ_API_KEY", cfg.GROQ_MODEL),
         OpenAICompatible("openai", "https://api.openai.com/v1",
@@ -331,18 +371,19 @@ def get_backends() -> list[Backend]:
 
 
 def pick_backend() -> tuple[Backend | None, str]:
-    """Choose a backend honoring TRANSCRIBE_BACKEND; explain the choice."""
-    pref = cfg.TRANSCRIBE_BACKEND
+    """Choose a backend honoring persisted settings; explain the choice."""
+    from app.settings import settings
+    pref = settings.get()["backend"]
     backends = get_backends()
     by_name = {b.name: b for b in backends}
     if pref != "auto":
         b = by_name.get(pref)
         if not b:
-            return None, f"Unknown TRANSCRIBE_BACKEND '{pref}'"
+            return None, f"Unknown backend '{pref}'"
         if not b.available():
             return None, f"Backend '{pref}' is not available (missing key or package)"
         return b, f"Using {pref}"
     for b in backends:
         if b.available():
             return b, f"Using {b.name}"
-    return None, "No transcription backend available. Install faster-whisper or set an API key."
+    return None, "No transcription backend available. Download a model or set an API key."

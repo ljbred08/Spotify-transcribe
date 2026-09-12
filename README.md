@@ -48,10 +48,29 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `TRANSCRIBE_BACKEND` | `auto` | `auto` / `parakeet` / `groq` / `openai` / `local` |
-| `PARAKEET_MODEL` | `nemo-parakeet-tdt-0.6b-v3` | any onnx-asr-supported model name |
+| `TRANSCRIBE_BACKEND` | `auto` | initial backend; overridden by the app's persisted settings |
 | `GROQ_API_KEY` | — | free-tier fast transcription with word timestamps |
 | `OPENAI_API_KEY` | — | fallback cloud backend |
+
+## Models & backend selection
+
+The **⚙ Models & backend** panel in the app (bottom of the sidebar) manages everything:
+
+- **Download / delete** local ONNX models (stored under `data/models/<id>/`, so deleting
+  is instant and safe)
+- **Pick the active model** — the Parakeet/Canary family via onnx-asr
+- **Pick the backend** — auto, local, Groq, or OpenAI
+
+Choices persist in `data/settings.json` and apply to the next job (no restart).
+
+| Model | Size | Good at |
+| --- | --- | --- |
+| `parakeet-v3` | ~2.4 GB | Best all-round, 25 languages, handles singing |
+| `parakeet-v2` | ~2.4 GB | English-only variant |
+| `canary-1b-flash` | ~2.6 GB | Spoken word (podcasts); weak on singing |
+| `canary-180m-flash` | ~780 MB | Tiny + fast spoken word; weak on singing |
+| `parakeet-ctc-0.6b` | ~2.4 GB | CTC decoder variant (English) |
+| `gigaam-v3-rnnt` | ~1.6 GB | Russian |
 | `YTDLP_COOKIES_FILE` | — | e.g. `cookies.txt` if yt-dlp gets blocked |
 | `YTDLP_EXTRA` | — | extra yt-dlp flags, comma-separated |
 

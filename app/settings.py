@@ -1,0 +1,50 @@
+"""Persisted app settings (backend + model selection)."""
+from __future__ import annotations
+
+import json
+import threading
+
+import app.config as cfg
+
+_DEFAULTS = {"backend": "auto", "model": "parakeet-v3"}
+_VALID_BACKENDS = {"auto", "parakeet", "groq", "openai"}
+
+
+class Settings:
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._path = cfg.DATA_DIR / "settings.json"
+        self._data = dict(_DEFAULTS)
+        self._load()
+
+    def _load(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            raw = json.loads(self._path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        for k in _DEFAULTS:
+            if k in raw:
+                self._data[k] = raw[k]
+
+    def _save(self) -> None:
+        self._path.write_text(json.dumps(self._data, indent=2), encoding="utf-8")
+
+    def get(self) -> dict:
+        with self._lock:
+            return dict(self._data)
+
+    def update(self, **fields) -> dict:
+        with self._lock:
+            if "backend" in fields:
+                if fields["backend"] not in _VALID_BACKENDS:
+                    raise ValueError(f"backend must be one of {sorted(_VALID_BACKENDS)}")
+                self._data["backend"] = fields["backend"]
+            if "model" in fields:
+                self._data["model"] = str(fields["model"])
+            self._save()
+            return dict(self._data)
+
+
+settings = Settings()

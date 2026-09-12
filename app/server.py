@@ -9,11 +9,14 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import app.config as cfg
-from app import exporters
+from app import exporters, model_manager, transcribe
 from app.models import JobStatus
 from app.pipeline import delete_track_files, pipeline, store
+from app.settings import settings
 
 app = FastAPI(title="Refrain", version="0.1.0")
+
+dl_manager = model_manager.DownloadManager()
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -102,6 +105,51 @@ def remove_track(track_id: str):
         raise HTTPException(404, "track not found")
     delete_track_files(track_id)
     return {"ok": True}
+
+
+# --- models & settings --------------------------------------------------------
+
+@app.get("/api/settings")
+def get_settings():
+    return settings.get()
+
+
+@app.put("/api/settings")
+def update_settings(body: dict):
+    try:
+        return settings.update(**{k: body[k] for k in ("backend", "model") if k in body})
+    except ValueError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.get("/api/models")
+def list_models():
+    downloads = {j["modelId"]: j for j in dl_manager.status()}
+    models = model_manager.list_models()
+    for m in models:
+        m["download"] = downloads.get(m["id"], {"status": "idle", "error": None})
+    return {"models": models, "settings": settings.get()}
+
+
+@app.post("/api/models/{model_id}/download")
+def download_model(model_id: str):
+    if not model_manager.get_spec(model_id):
+        raise HTTPException(404, "unknown model")
+    return dl_manager.start(model_id)
+
+
+@app.delete("/api/models/{model_id}")
+def delete_model(model_id: str):
+    if not model_manager.get_spec(model_id):
+        raise HTTPException(404, "unknown model")
+    job = dl_manager.status(model_id)
+    if isinstance(job, dict) and job.get("status") == "downloading":
+        raise HTTPException(409, "model is currently downloading")
+    removed = model_manager.delete_model(model_id)
+    transcribe.parakeet.drop_cache(model_id)
+    if settings.get()["model"] == model_id:
+        settings.update(model="parakeet-v3")
+    return {"ok": removed}
 
 
 @app.exception_handler(404)

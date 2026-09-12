@@ -134,6 +134,54 @@
   .track-del:hover { color: var(--danger); background: rgba(248,113,113,.1); }
   .empty-lib { color: var(--muted); font-size: 13px; padding: 14px 8px; line-height: 1.5; }
 
+  /* ---------- models panel ---------- */
+  #models-panel {
+    border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--panel);
+    font-size: 13px;
+  }
+  #models-panel summary {
+    cursor: pointer; padding: 11px 12px; color: var(--muted);
+    font-weight: 600; user-select: none;
+  }
+  #models-panel summary:hover { color: var(--text); }
+  #models-panel[open] summary { border-bottom: 1px solid var(--line); }
+  .backend-row {
+    display: flex; align-items: center; gap: 8px;
+    padding: 10px 12px 4px;
+  }
+  .backend-row label { color: var(--muted); font-size: 12px; }
+  .backend-row select {
+    flex: 1; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 8px; font-size: 12.5px; outline: none;
+  }
+  #models-list { padding: 8px; display: flex; flex-direction: column; gap: 6px; }
+  .model-row {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 9px 10px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .model-row.active { border-color: rgba(30,215,96,.45); }
+  .model-top { display: flex; align-items: center; gap: 8px; }
+  .model-name { font-weight: 600; flex: 1; }
+  .model-use {
+    background: none; border: 1px solid var(--line); color: var(--muted);
+    border-radius: 999px; font-size: 11px; padding: 3px 10px; cursor: pointer;
+  }
+  .model-row.active .model-use { color: var(--accent); border-color: rgba(30,215,96,.45); }
+  .model-sub { color: var(--muted); font-size: 11.5px; line-height: 1.4; }
+  .model-actions { display: flex; gap: 6px; margin-top: 2px; }
+  .model-btn {
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; font-size: 11.5px; padding: 4px 10px; cursor: pointer;
+  }
+  .model-btn:hover { border-color: #2f3950; }
+  .model-btn.danger:hover { color: var(--danger); border-color: rgba(248,113,113,.4); }
+  .model-btn:disabled { opacity: .45; cursor: default; }
+  .model-status { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+  .model-status .spinner { width: 10px; height: 10px; border-width: 1.5px; }
+  .model-status.err { color: var(--danger); }
+
   /* ---------- main ---------- */
   #main {
     flex: 1; height: 100vh; overflow: hidden;
@@ -291,6 +339,20 @@
     <h2>Library</h2>
     <div id="track-list"></div>
   </div>
+
+  <details id="models-panel">
+    <summary>⚙︎ Models &amp; backend</summary>
+    <div class="backend-row">
+      <label for="backend-select">Backend</label>
+      <select id="backend-select">
+        <option value="auto">Auto (recommended)</option>
+        <option value="parakeet">Local (Parakeet/Canary)</option>
+        <option value="groq">Groq cloud</option>
+        <option value="openai">OpenAI cloud</option>
+      </select>
+    </div>
+    <div id="models-list"></div>
+  </details>
 </aside>
 
 <main id="main">
@@ -653,8 +715,80 @@ document.querySelectorAll(".export-btn").forEach((btn) => {
   });
 });
 
+/* ---------------- models ---------------- */
+async function refreshModels() {
+  const res = await fetch("/api/models");
+  const data = await res.json();
+  renderModels(data);
+  const bs = $("#backend-select");
+  if (data.settings) bs.value = data.settings.backend;
+}
+
+function renderModels(data) {
+  const list = $("#models-list");
+  list.innerHTML = "";
+  for (const m of data.models) {
+    const row = document.createElement("div");
+    row.className = "model-row" + (data.settings && data.settings.model === m.id ? " active" : "");
+    const dl = m.download || {};
+    const dlState = dl.status === "downloading" ? "downloading…"
+      : dl.status === "done" ? "ready"
+      : dl.status === "error" ? `error: ${dl.error}` : null;
+    row.innerHTML = `
+      <div class="model-top">
+        <span class="model-name">${escapeHtml(m.id)}</span>
+        ${data.settings && data.settings.model === m.id ? '<span class="badge green">active</span>' : ""}
+        <button class="model-use">${data.settings && data.settings.model === m.id ? "in use" : "use"}</button>
+      </div>
+      <div class="model-sub">${escapeHtml(m.notes)} · ${m.languages}</div>
+      <div class="model-sub">${m.downloaded ? `on disk · ${m.sizeOnDiskMb} MB` : `not downloaded · ~${m.sizeMb} MB`}</div>
+      ${dlState ? `<div class="model-status ${dl.status === "error" ? "err" : ""}">${dl.status === "downloading" ? '<div class="spinner"></div>' : ""}${escapeHtml(dlState)}</div>` : ""}
+      <div class="model-actions">
+        ${m.downloaded ? "" : `<button class="model-btn" data-act="download">↓ Download (~${m.sizeMb} MB)</button>`}
+        ${m.downloaded ? `<button class="model-btn danger" data-act="delete">Delete</button>` : ""}
+      </div>`;
+    row.querySelector(".model-use").addEventListener("click", async () => {
+      if (!m.downloaded) { alert("Download the model first."); return; }
+      await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: m.id, backend: "parakeet" }) });
+      refreshModels();
+    });
+    const dlBtn = row.querySelector('[data-act="download"]');
+    if (dlBtn) dlBtn.addEventListener("click", async () => {
+      dlBtn.disabled = true;
+      await fetch(`/api/models/${m.id}/download`, { method: "POST" });
+      pollModels();
+    });
+    const delBtn = row.querySelector('[data-act="delete"]');
+    if (delBtn) delBtn.addEventListener("click", async () => {
+      if (!confirm(`Delete ${m.id} from disk?`)) return;
+      await fetch(`/api/models/${m.id}`, { method: "DELETE" });
+      refreshModels();
+    });
+    list.appendChild(row);
+  }
+}
+
+let modelsPoll = null;
+function pollModels() {
+  clearInterval(modelsPoll);
+  modelsPoll = setInterval(async () => {
+    const res = await fetch("/api/models");
+    const data = await res.json();
+    renderModels(data);
+    const busy = data.models.some((m) => m.download && m.download.status === "downloading");
+    if (!busy) clearInterval(modelsPoll);
+  }, 1500);
+}
+
+$("#backend-select").addEventListener("change", async (e) => {
+  await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ backend: e.target.value }) });
+});
+
 /* ---------------- boot ---------------- */
 refreshLibrary();
+refreshModels();
 </script>
 </body>
 </html>

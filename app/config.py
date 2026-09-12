@@ -37,7 +37,6 @@ YTDLP_EXTRA = [f for f in _get("YTDLP_EXTRA").split(",") if f.strip()]
 
 # --- Transcription ---------------------------------------------------------
 TRANSCRIBE_BACKEND = _get("TRANSCRIBE_BACKEND", "auto").strip().lower()
-PARAKEET_MODEL = _get("PARAKEET_MODEL", "nemo-parakeet-tdt-0.6b-v3")
 WHISPER_MODEL = _get("WHISPER_MODEL", "base")
 WHISPER_DEVICE = _get("WHISPER_DEVICE", "auto")
 GROQ_API_KEY = _get("GROQ_API_KEY")
@@ -50,6 +49,6 @@ JOB_CONCURRENCY = max(1, int(_get("JOB_CONCURRENCY", "1")))
 
 __all__ = [
     "DATA_DIR", "YTDLP_COOKIES_FILE", "YTDLP_EXTRA", "TRANSCRIBE_BACKEND",
-    "PARAKEET_MODEL", "WHISPER_MODEL", "WHISPER_DEVICE", "GROQ_API_KEY",
+    "WHISPER_MODEL", "WHISPER_DEVICE", "GROQ_API_KEY",
     "GROQ_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL", "JOB_CONCURRENCY",
 ]
