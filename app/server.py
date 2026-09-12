@@ -210,4 +210,12 @@ def not_found(request, exc):  # SPA-friendly
     return JSONResponse({"detail": str(exc.detail)}, status_code=404)
 
 
+@app.get("/", include_in_schema=False)
+def index():
+    resp = FileResponse(WEB_DIR / "index.html")
+    # no heuristic caching: the UI is a single file, edits must show up on reload
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 app.mount("/", StaticFiles(directory=WEB_DIR, html=True), name="web")
