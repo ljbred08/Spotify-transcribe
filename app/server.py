@@ -172,6 +172,17 @@ def update_settings(body: dict):
     return out
 
 
+@app.post("/api/llm/discover")
+def discover_llm(body: dict | None = None):
+    """Probe candidate ollama URLs (hint first, then localhost defaults)."""
+    hint = ((body or {}).get("url") or "").strip() or None
+    found = formatter.discover_server(hint=hint, current=settings.get().get("llm_url"))
+    if found:
+        settings.update(llm_url=found)
+        formatter.invalidate_status_cache()
+    return {"found": found, "llm": formatter.llm_status()}
+
+
 @app.get("/api/models")
 def list_models():
     downloads = {j["modelId"]: j for j in dl_manager.status()}

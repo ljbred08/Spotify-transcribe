@@ -1,64 +1,67 @@
-"""LLM-powered lyric formatting: punctuation, capitalization, line breaks.
+"""LLM-powered lyric formatting: line breaking + capitalization cleanup.
 
-Design: the ASR returns one continuous word stream with timings. A small local
-LLM (via ollama or any OpenAI-compatible server) reformats it into short
-karaoke-style lines. Because karaoke requires exact word↔timing mapping, the
-LLM output is *verified* against the input words and any chunk that fails
-validation falls back to the heuristic splitter. The LLM therefore only ever
-improves presentation; timing integrity is guaranteed deterministically.
+Design ("re-emit with breaks"): the ASR returns a continuous word stream with
+timings. The LLM's ONLY job is to re-emit the exact same words with line breaks
+inserted so each line reads like a printed lyric booklet (a roughly
+grammatically complete thought). It never writes, removes, or "corrects" words:
+the output is verified token-exact against the input and otherwise rejected and
+retried, then falls back to timing-based line splitting. This framing keeps
+small models from reciting famous lyrics from memory (verified: the task is
+copying, and the sync rationale makes "helpful" correction counterproductive).
+
+Lyric conventions are applied deterministically afterwards (never by the LLM):
+- no terminal periods (standard for lyrics); ? and ! and commas are kept
+- every line starts capitalized; "I" and I'm/I'll/... stay capitalized
+- stray mid-line ASR capitalization is lower-cased (acronyms kept)
+
+Timing integrity is untouched throughout: only display text changes, never the
+Word objects' start/end.
 """
 from __future__ import annotations
 
-import os
 import re
+import time
 from dataclasses import dataclass
 
 import httpx
 
 from app.models import Line, Word
 
-# NOTE: LFM2.5-350M was evaluated and cannot do faithful copy-tasks (stops
-# after ~25 tokens, rewrites words). qwen2.5:3b is the smallest tested model
-# that reformats reliably; any chat model works.
+# NOTE: LFM2.5-350M was evaluated and cannot do ANY of these tasks (recites,
+# truncates, or fills JSON schemas with random words, even with grammar
+# constraints). qwen2.5:3b is the smallest model tested that re-emits text
+# faithfully; any instruct chat model of ~1B+ should work.
 # URL + model live in persisted settings (seeded from OLLAMA_URL /
 # FORMATTER_MODEL env on first run) and are editable in the UI.
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_FORMATTER_MODEL = "qwen2.5:3b"
-CHUNK_WORDS = 80       # words per LLM request (keeps outputs short + reliable)
+CHUNK_WORDS = 80       # words per LLM request (short outputs stay reliable)
 MAX_LINE_CHARS = 52    # karaoke line length cap
-# words an LLM may legitimately add (stylistic connectives / ad-libs)
-_OK_INSERTS = {"oh", "ooh", "yeah", "yea", "hey", "la", "na", "uh", "ah",
-               "come", "on", "now", "then", "so", "and", "but", "cmon"}
-_MAX_INSERT_RUN = 2    # longer invented runs = hallucination → reject chunk
 _SENTENCE_GAP = 0.9    # silence gap after a phrase that suggests a sentence end
 
-# Task framing matters: asking a small model to "reformat" a transcript of a
-# famous song makes it recite the REAL lyrics from memory instead of copying
-# (verified with qwen2.5:3b on the rickroll — pronouns dropped, verses invented).
-# Asking it to insert line-break markers keeps the copy mechanical: it produced
-# an exact token-preserving result on the same input.
-_PROMPT = """Insert line-break markers " / " into this song transcript at natural lyric line boundaries. Also add punctuation and capitalization, but copy every word EXACTLY as given — never add, remove, or change words. The transcript is automatic and may contain odd words; keep them anyway. Output only the result.
+_BREAK_PROMPT = """This text is a speech-recognition transcript used by a synchronization system. Reproduce it EXACTLY, word for word in the same order - even words that look wrong, misspelled, or misheard MUST be kept exactly as written, because changing any word breaks the sync. Your ONLY task is inserting line breaks so each line is a roughly grammatically complete thought. Do NOT correct, complete, or improve the text.
 
-{chunk}"""
+Transcript:
+{chunk}
 
-# Used when the whole-chunk pass fails (e.g. the model recites famous lyrics
-# from memory instead of copying): format each timing-derived phrase alone.
-# Tiny phrases leave no room for memory contamination, and any rewritten
-# phrase simply keeps its raw text — polish where possible, never wrong.
-_PHRASE_PROMPT = """Add punctuation and capitalization to this short transcribed lyric phrase. Copy every word EXACTLY as given — never add, remove, or change words. It may contain odd words; keep them. Output only the formatted phrase on one line.
-
-{phrase}"""
+Output only the reproduced transcript with line breaks, word-identical to the input."""
 
 
 @dataclass
 class FormatResult:
     lines: list[Line]
-    llm_lines: int      # lines that came from the LLM
-    fallback_lines: int  # lines from the heuristic fallback
+    llm_lines: int      # lines whose breaks came from the LLM
+    fallback_lines: int  # lines from the timing-based fallback
 
 
 def _norm(tok: str) -> str:
     return re.sub(r"[^a-z0-9']", "", tok.lower())
+
+
+def _clean_token(text: str) -> str:
+    """Strip punctuation/casing noise from an ASR word, keeping apostrophes."""
+    base = re.sub(r"[^\w'’]", "", text, flags=re.UNICODE)
+    return base or text
 
 
 def _llm_config() -> "tuple[str, str]":
@@ -88,19 +91,69 @@ def llm_status() -> dict:
         online = True
     except Exception:
         online = False
-    # exact or tag-prefix match ("qwen2.5:3b" also matches a listed "qwen2.5:3b-instruct")
+    # exact or tag-prefix match ("qwen2.5:3b" also matches "qwen2.5:3b-instruct")
     installed = model in models or any(m.startswith(model) for m in models)
     return {"url": url, "model": model, "online": online,
             "installed": installed, "models": models}
 
 
 def llm_status_cached() -> dict:
-    import time
     now = time.time()
     if _status_cache["data"] is None or now - _status_cache["at"] > _STATUS_TTL:
         _status_cache["data"] = llm_status()
         _status_cache["at"] = now
     return _status_cache["data"]
+
+
+def invalidate_status_cache() -> None:
+    _status_cache["at"] = 0.0
+
+
+def probe_ollama(url: str, timeout: float = 0.8) -> bool:
+    """Cheap reachability check for one base URL."""
+    try:
+        with httpx.Client(timeout=timeout) as c:
+            tags = c.get(f"{url.rstrip('/')}/api/tags").json()
+        return isinstance(tags, dict) and "models" in tags
+    except Exception:
+        return False
+
+
+def discover_candidates(hint: str | None = None,
+                        current: str | None = None) -> list[str]:
+    """URLs to try when auto-discovering an ollama server, best first."""
+    urls: list[str] = []
+
+    def add(u: str) -> None:
+        u = u.strip().rstrip("/")
+        if u and u not in urls:
+            urls.append(u)
+
+    from urllib.parse import urlsplit
+    if hint:
+        raw = hint.strip()
+        if raw and "://" not in raw:
+            raw = f"http://{raw}"
+        add(raw)
+        sp = urlsplit(raw)
+        host = sp.hostname or "127.0.0.1"
+        for port in (11434, 11435):
+            add(f"http://{host}:{port}")
+    if current:
+        add(current)
+    for u in ("http://127.0.0.1:11434", "http://localhost:11434",
+              "http://127.0.0.1:11435"):
+        add(u)
+    return urls
+
+
+def discover_server(hint: str | None = None,
+                    current: str | None = None) -> str | None:
+    """Return the first reachable ollama URL, or None."""
+    for url in discover_candidates(hint=hint, current=current):
+        if probe_ollama(url):
+            return url.rstrip("/")
+    return None
 
 
 def llm_available() -> bool:
@@ -109,15 +162,13 @@ def llm_available() -> bool:
     return st["online"] and st["installed"]
 
 
-def _chat(chunk_text: str, *, phrase: bool = False) -> str | None:
-    prompt = _PHRASE_PROMPT if phrase else _PROMPT
+def _chat(prompt: str) -> str | None:
     url, model = _llm_config()
     try:
         with httpx.Client(timeout=240.0) as c:
             r = c.post(f"{url}/api/chat", json={
                 "model": model,
-                "messages": [{"role": "user", "content": prompt.format(
-                    chunk=chunk_text, phrase=chunk_text)}],
+                "messages": [{"role": "user", "content": prompt}],
                 "stream": False,
                 "keep_alive": "30m",
                 "options": {"temperature": 0.0, "num_ctx": 4096, "num_predict": 500},
@@ -131,89 +182,107 @@ def _chunks(words: list[Word], size: int) -> list[list[Word]]:
     return [words[i:i + size] for i in range(0, len(words), size)]
 
 
-def _verify_and_align(chunk: list[Word], llm_text: str) -> list[list[Word]] | None:
-    """Map the LLM's lines back onto input words.
+_DANGLING = {"the", "and", "of", "to", "a", "an", "my", "your", "our",
+             "for", "with", "on", "in", "but", "or", "so", "if", "as",
+             "that", "it", "is", "are", "was", "were", "gonna", "wanna"}
 
-    Returns a list of word-lists (one per line), or None when the LLM output
-    is not a faithful reformatting of the chunk. Inserted words are tolerated
-    (kept, with interpolated timings); any DROPPED input word rejects the
-    whole chunk — karaoke must not silently lose words.
+
+def _break_quality(lines: list[list[Word]]) -> bool:
+    """Heuristic quality bar for a proposed line mapping.
+
+    Rejects answers that are technically word-exact but lazy: most lines
+    ending on dangling connectives, or average line length way over booklet
+    scale. Used to decide whether to try the second prompt.
     """
-    # the LLM marks line boundaries with " / " — turn them into real breaks
-    # (handle both embedded markers and native line wraps)
-    raw_lines: list[str] = []
-    for ln in llm_text.splitlines():
-        for part in ln.split(" / "):
-            part = part.strip()
-            if part:
-                raw_lines.append(part)
-    if not raw_lines:
-        return None
-    out_lines: list[list[Word]] = []
-    inp = 0
-    n_in = len(chunk)
-    vocab = {_norm(w.text) for w in chunk if _norm(w.text)}
-    insert_run = 0
+    if not lines:
+        return False
+    ends = [_norm(ln[-1].text) for ln in lines]
+    dangle = sum(1 for e in ends if e in _DANGLING)
+    avg = sum(len(ln) for ln in lines) / len(lines)
+    return dangle <= max(1, len(lines) // 3) and avg <= 9.5
 
-    for line_text in raw_lines:
-        out_words: list[Word] = []
-        for tok in line_text.split():
-            nt = _norm(tok)
-            if not nt:
+
+def _break_lines(chunk: list[Word]) -> list[list[Word]] | None:
+    """Ask the LLM to re-emit the chunk with line breaks; verify token-exact.
+
+    Returns lists of the ORIGINAL Word objects grouped into lines, or None when
+    every attempt fails verification (then the caller uses timing-based
+    splitting). Two attempts: the sync-framing prompt, then a plainer variant.
+    A word-exact but lazy mapping (see _break_quality) triggers the retry too;
+    if both attempts are word-exact, the better-quality one wins.
+    """
+    text = " ".join(w.text for w in chunk)
+    src = [t for t in (_norm(x) for x in text.split()) if t]
+    prompts = (
+        _BREAK_PROMPT.format(chunk=text),
+        "Copy the following text exactly, word for word, adding line breaks "
+        "where a reader would pause for a new sentence or clause. You are a "
+        "typist, not an editor: do not fix anything, even obvious errors. The "
+        f"output must be word-identical to the input.\n\nText:\n{text}\n\n"
+        "Output only the text with your inserted line breaks.",
+    )
+    best: list[list[Word]] | None = None
+    for prompt in prompts:
+        raw = _chat(prompt)
+        if not raw:
+            continue
+        out = [t for t in (_norm(x) for x in raw.split()) if t]
+        if out != src:
+            continue  # model changed/dropped/added words -> unusable
+        lines: list[list[Word]] = []
+        i = 0
+        for ln in raw.splitlines():
+            toks = [t for t in ln.split() if _norm(t)]
+            if not toks:
                 continue
-            # find the next matching input word within a small lookahead
-            matched = -1
-            for j in range(inp, min(inp + 6, n_in)):
-                if _norm(chunk[j].text) == nt:
-                    matched = j
-                    break
-            if matched == -1:
-                for j in range(inp, min(inp + 6, n_in)):
-                    a, b = _norm(chunk[j].text), nt
-                    if a and b and (a.startswith(b) or b.startswith(a)):
-                        matched = j
-                        break
-            if matched > inp:
-                return None  # lookahead skipped input words = the LLM dropped them
-            if matched == -1:
-                # LLM inserted a word: only tolerate stylistic connectives or
-                # repeats of words from this chunk, in short runs
-                if (nt not in _OK_INSERTS and nt not in vocab) or insert_run >= _MAX_INSERT_RUN:
-                    return None
-                prev_end = chunk[inp - 1].end if inp > 0 else chunk[0].start
-                next_start = chunk[inp].start if inp < n_in else prev_end + 0.2
-                w = Word(text=tok, start=prev_end, end=next_start)
-                w.inserted = True  # type: ignore[attr-defined]
-                out_words.append(w)
-                insert_run += 1
-                continue
-            insert_run = 0
-            out_words.append(chunk[matched])
-            inp = matched + 1
-        if out_words:
-            out_lines.append(out_words)
-        if inp >= n_in:
-            break
+            if i + len(toks) > len(chunk):
+                break
+            lines.append(chunk[i:i + len(toks)])
+            i += len(toks)
+        if i != len(chunk) or not lines:
+            continue
+        # a single undivided line for a long chunk is token-exact but
+        # useless (the model skipped the actual task) -> keep trying
+        if len(lines) == 1 and len(chunk) >= 12:
+            continue
+        if _break_quality(lines):
+            return lines
+        if best is None:
+            best = lines
+    return best
 
-    # unmatched trailing input words = the LLM stopped early → reject
-    if inp < n_in:
-        return None
 
-    # trim hallucinated tails: interpolated words after the last real match
-    # of the final line are invention, not formatting
-    if out_lines:
-        last = out_lines[-1]
-        while last and getattr(last[-1], "inserted", False):
-            last.pop()
-        if not last:
-            out_lines.pop()
-    if not out_lines:
-        return None
+def _polish_token(text: str, *, line_start: bool) -> str:
+    """Apply lyric conventions to one word's display text.
 
-    # degenerate one-word-per-line outputs (only meaningful for long chunks)
-    if n_in >= 12 and len(out_lines) > n_in // 2:
-        return None
-    return out_lines
+    - drop terminal periods (lyrics don't use them); keep ? ! , etc.
+    - capitalize line starts, "I", and I'm/I'll/...; lower-case stray
+      mid-line capitals (all-caps words are treated as acronyms and kept)
+    """
+    base = text
+    if base.endswith("?.") or base.endswith("!."):
+        base = base[:-1]
+    while base.endswith(".") and not base.endswith("..."):
+        base = base[:-1]
+    core = _clean_token(base)
+    if not core:
+        return text  # punctuation-only token: leave it alone
+    # keep the trailing punctuation that survived the period strip
+    tail = base[len(base.rstrip("?!.,;:!?…")):] if base != core else ""
+    low = core.lower()
+    if line_start or low == "i" or low.startswith(("i'", "i’")):
+        core = core[0].upper() + core[1:]
+    elif not core.isupper():
+        core = core[0].lower() + core[1:]
+    return core + tail
+
+
+def _decorate(groups: list[list[Word]]) -> list[list[Word]]:
+    """Apply _polish_token to every word, in place, line-aware."""
+    for g in groups:
+        for j, w in enumerate(g):
+            w.text = _polish_token(w.text, line_start=(j == 0))
+    return groups
 
 
 def _split_long(line_words: list[Word]) -> list[list[Word]]:
@@ -233,8 +302,15 @@ def _split_long(line_words: list[Word]) -> list[list[Word]]:
     return out
 
 
+def _split_long_group(mapped: list[list[Word]]) -> list[list[Word]]:
+    out: list[list[Word]] = []
+    for line in mapped:
+        out.extend(_split_long(line))
+    return out
+
+
 def _heuristic_lines(chunk: list[Word]) -> list[list[Word]]:
-    """Silence-gap line splitting (same rule as exporters, chunk-local)."""
+    """Timing-based line splitting: break after long silences or long lines."""
     groups: list[list[Word]] = []
     cur: list[Word] = []
     prev_end = chunk[0].start
@@ -265,105 +341,30 @@ def _to_lines(groups: list[list[Word]]) -> list[Line]:
 
 
 def format_words(words: list[Word]) -> FormatResult:
-    """Format a timed word stream into karaoke lines using the LLM.
+    """Format a timed word stream into karaoke lines.
 
-    Three tiers per 80-word chunk:
-      1. chunk-level LLM pass (adds punctuation + line breaks, verified)
-      2. per-phrase LLM pass on timing-derived phrases (for chunks where the
-         model recites famous lyrics instead of copying)
-      3. raw phrases (heuristically split) — presentation unchanged, always safe
+    Per 80-word chunk: the LLM re-emits the exact words with line breaks
+    (verified token-exact, retried once, then timing-based fallback); lyric
+    conventions (no terminal periods, corrected caps) are applied
+    deterministically to every line either way. The LLM can therefore never
+    add, drop, or rewrite a word — it only proposes where lines break.
     """
     if not words:
         return FormatResult(lines=[], llm_lines=0, fallback_lines=0)
-
-    # annotate each word with the start of the NEXT word in the stream, so
-    # phrase-end heuristics can see silence gaps (last word -> None)
-    for i, w in enumerate(words):
-        w._next_start = words[i + 1].start if i + 1 < len(words) else None  # type: ignore[attr-defined]
 
     finished: list[Line] = []
     llm_count = 0
     fallback_count = 0
 
     for chunk in _chunks(words, CHUNK_WORDS):
-        text = " ".join(w.text for w in chunk)
-        llm_text = _chat(text)
-        mapped = _verify_and_align(chunk, llm_text) if llm_text else None
+        mapped = _break_lines(chunk)
         if mapped:
-            finished.extend(_to_lines(_split_long_group(mapped)))
-            llm_count += len(mapped)
-            continue
-        # Tier 2/3: timings own the line breaks; LLM only polishes each phrase.
-        for g in _heuristic_lines(chunk):
-            polished = _polish_phrase(g)
-            if polished is not None:
-                finished.append(polished)
-                llm_count += 1
-            else:
-                finished.append(_to_lines([g])[0])
-                fallback_count += 1
+            groups = _split_long_group(mapped)
+            llm_count += len(groups)
+        else:
+            groups = _split_long_group(_heuristic_lines(chunk))
+            fallback_count += len(groups)
+        finished.extend(_to_lines(_decorate(groups)))
 
     return FormatResult(lines=finished,
                         llm_lines=llm_count, fallback_lines=fallback_count)
-
-
-def _polish_phrase(group: list[Word]) -> Line | None:
-    """LLM-format one timing-derived phrase; None = keep it raw.
-
-    The returned line always carries the ORIGINAL Word objects (with their
-    timings); only the display text changes.
-    """
-    if len(group) < 2:
-        return None  # nothing to punctuate on a single word
-    src = " ".join(w.text for w in group)
-    out = _chat(src, phrase=True)
-    if not out:
-        return None
-    out = out.strip().splitlines()[0].strip()
-    # word-level faithfulness check: same tokens, same order, no adds/drops
-    src_toks = [_norm(t) for t in src.split()]
-    out_toks = [_norm(t) for t in out.split()]
-    if [t for t in src_toks if t] != [t for t in out_toks if t]:
-        return None
-    # single-sentence phrases only: mid-phrase sentence breaks would need
-    # re-splitting which we don't do here
-    if out.count(". ") + out.count("? ") + out.count("! ") > 1:
-        return None
-    # fold the polish onto the words themselves (verification proved the
-    # token sequences match 1:1) so the player, which renders word spans,
-    # shows the same punctuation/caps as line.text and the exports do
-    polished_tokens = [t for t in out.split() if _norm(t)]
-    for w, tok in zip(group, polished_tokens):
-        w.text = tok
-    if not out.endswith((".", "?", "!")) and _ends_sentence(group):
-        out = out.rstrip(",;:") + "."
-    return Line(
-        text=out,
-        start=round(group[0].start, 3),
-        progress=0.0,
-        words=list(group),
-    )
-
-
-def _capitalize_first(text: str) -> str:
-    return text[:1].upper() + text[1:] if text else text
-
-
-def _ends_sentence(group: list[Word]) -> bool:
-    """Heuristic: does this phrase end where a sentence likely ends?
-
-    A big silence gap (or the track's end) right after the final word means
-    the singer finished a thought — a good place for a period.
-    """
-    if not group:
-        return False
-    end = group[-1].end
-    nxt = getattr(group[-1], "_next_start", None)
-    return nxt is None or (nxt - end) > _SENTENCE_GAP
-
-
-def _split_long_group(mapped: list[list[Word]]) -> list[list[Word]]:
-    out: list[list[Word]] = []
-    for line in mapped:
-        out.extend(_split_long(line))
-    return out

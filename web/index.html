@@ -190,6 +190,7 @@
   .model-status { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
   .model-status .spinner { width: 10px; height: 10px; border-width: 1.5px; }
   .model-status.err { color: var(--danger); }
+  .model-status.ok { color: var(--accent); }
 
   /* ---------- main ---------- */
   #main {
@@ -342,8 +343,18 @@
   ::-webkit-scrollbar-thumb { background: #232a3a; border-radius: 99px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-track { background: transparent; }
 
-  /* ---------- mobile / narrow ---------- */
-  @media (max-width: 900px) {
+  /* ---------- tablet: same desktop layout, slimmer sidebar ---------- */
+  @media (max-width: 1023px) {
+    #sidebar { width: 300px; min-width: 264px; }
+    #hero { padding: 26px 28px 16px; gap: 16px; }
+    #hero-art { width: 84px; height: 84px; font-size: 34px; }
+    #hero-meta h2 { font-size: 25px; }
+    #wave-wrap, #controls, #export-row, #retrans-row, #lyrics { padding-left: 28px; padding-right: 28px; }
+    .lyric-line { font-size: 22px; }
+  }
+
+  /* ---------- phone / narrow ---------- */
+  @media (max-width: 640px) {
     body { flex-direction: column; }
     /* sidebar becomes a sticky compact header: paste box always reachable */
     #sidebar {
@@ -363,7 +374,7 @@
       -webkit-overflow-scrolling: touch;
     }
     .track-card {
-      flex: 0 0 auto; width: 230px; scroll-snap-align: start;
+      flex: 0 0 auto; width: 210px; scroll-snap-align: start;
       -webkit-tap-highlight-color: transparent;
     }
     .track-del { opacity: 1; }   /* no hover on touch */
@@ -390,14 +401,6 @@
     .export-btn { padding: 9px 14px; font-size: 12px; }
     /* >=16px on form controls so iOS Safari doesn't zoom-on-focus */
     #url-input, #re-model, .backend-row select, .backend-row input[type="text"] { font-size: 16px; }
-  }
-  @media (max-width: 520px) {
-    .track-card { width: 200px; }
-    .lyric-line { font-size: 17px; }
-    #hero-meta h2 { font-size: 18px; }
-    #hero-art { width: 48px; height: 48px; font-size: 21px; }
-    .ctrl-btn { width: 42px; height: 42px; }
-    #play-btn { width: 48px; height: 48px; }
   }
 </style>
 </head>
@@ -451,6 +454,7 @@
       </div>
       <div class="backend-row">
         <button class="model-btn" id="llm-refresh" type="button">Check connection</button>
+        <button class="model-btn" id="llm-discover" type="button" title="Probe localhost and common ports for a running ollama server">Auto-discover</button>
         <span id="llm-hint" class="model-sub"></span>
       </div>
     </div>
@@ -949,8 +953,8 @@ function renderLlm(llm, enabled) {
   t.disabled = !ok;
   status.textContent = !llm.online ? "(offline)"
     : !llm.installed ? `(model "${llm.model}" not pulled)`
-    : "";
-  status.className = "model-status" + (ok ? "" : " err");
+    : "✔ connected";
+  status.className = "model-status" + (ok ? " ok" : " err");
   if (document.activeElement !== $("#llm-url")) {
     $("#llm-url").value = llm.url || "";
   }
@@ -1098,10 +1102,34 @@ $("#llm-url").addEventListener("input", () => {
 $("#llm-refresh").addEventListener("click", async () => {
   const btn = $("#llm-refresh");
   btn.disabled = true;
+  btn.textContent = "Checking…";
   try {
-    await saveLlmSettings({ llm_url: $("#llm-url").value.trim() || undefined });
+    await saveLlmSettings({ llm_url: $("#llm-url").value.trim() || undefined, check_llm: true });
   } finally {
     btn.disabled = false;
+    btn.textContent = "Check connection";
+  }
+});
+
+$("#llm-discover").addEventListener("click", async () => {
+  const btn = $("#llm-discover");
+  btn.disabled = true;
+  btn.textContent = "Searching…";
+  try {
+    const res = await fetch("/api/llm/discover", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: $("#llm-url").value.trim() }),
+    });
+    const data = await res.json();
+    if (data.found) {
+      renderLlm(data.llm, null);
+      saveLlmSettings({});  // refresh status + availability
+    } else {
+      $("#llm-hint").textContent = "No ollama server found — is it running?";
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "Auto-discover";
   }
 });
 
