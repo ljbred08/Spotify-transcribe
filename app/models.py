@@ -199,7 +199,11 @@ class Store:
         return self._transcript_dir(track_id) / "versions.json"
 
     def _migrate_legacy_transcript(self, track_id: str) -> None:
-        """Move a pre-versioning transcripts/<id>.json into v1 of the new layout."""
+        """Move a pre-versioning transcripts/<id>.json into v1 of the new layout.
+
+        Callers must hold self._lock (the index read-modify-write is not
+        atomic on its own).
+        """
         legacy = cfg.DATA_DIR / "transcripts" / f"{track_id}.json"
         if not legacy.exists():
             return
@@ -237,6 +241,15 @@ class Store:
         Returns the version number. Previous versions are kept so a bad
         re-run can always be rolled back.
         """
+        # the index read-modify-write must not interleave with an activate()
+        # from an endpoint thread or another job's save
+        with self._lock:
+            return self._save_transcript_locked(track_id, lines,
+                                                backend=backend, note=note)
+
+    def _save_transcript_locked(self, track_id: str, lines: list[Line],
+                                *, backend: str | None,
+                                note: str | None) -> int:
         payload = [
             {
                 "text": line.text,
@@ -264,6 +277,10 @@ class Store:
         return version
 
     def load_transcript(self, track_id: str) -> list[Line] | None:
+        with self._lock:
+            return self._load_transcript_locked(track_id)
+
+    def _load_transcript_locked(self, track_id: str) -> list[Line] | None:
         self._migrate_legacy_transcript(track_id)
         index = self._read_versions_index(track_id)
         if index is None:
@@ -288,16 +305,19 @@ class Store:
 
     def list_versions(self, track_id: str) -> dict | None:
         """The versions index for a track (None when it has no transcripts)."""
-        self._migrate_legacy_transcript(track_id)
-        return self._read_versions_index(track_id)
+        with self._lock:
+            self._migrate_legacy_transcript(track_id)
+            return self._read_versions_index(track_id)
 
     def activate_version(self, track_id: str, version: int) -> bool:
-        index = self._read_versions_index(track_id)
-        if not index or not any(v["version"] == version for v in index["versions"]):
-            return False
-        index["active"] = version
-        self._write_versions_index(track_id, index)
-        return True
+        with self._lock:
+            self._migrate_legacy_transcript(track_id)
+            index = self._read_versions_index(track_id)
+            if not index or not any(v["version"] == version for v in index["versions"]):
+                return False
+            index["active"] = version
+            self._write_versions_index(track_id, index)
+            return True
 
     def audio_path(self, track_id: str) -> Path:
         return cfg.DATA_DIR / "audio" / f"{track_id}.m4a"

@@ -628,7 +628,9 @@ async function selectTrack(trackId) {
   $("#track-artist").textContent = currentData.artist;
   $("#badge-lines").textContent = `${currentData.lines.length} lines`;
   $("#badge-backend").textContent = "transcribed";
-  audio.src = currentData.audioUrl;
+  if (currentData.lines.length) {
+    audio.src = currentData.audioUrl;
+  }
   buildLyrics();
   buildWaveform();
   loadVersions(trackId);
@@ -914,11 +916,25 @@ function pollModels() {
   modelsPoll = setInterval(async () => {
     const res = await fetch("/api/models");
     const data = await res.json();
-    renderModels(data);
-    const busy = data.models.some((m) => m.download && m.download.status === "downloading");
-    if (!busy) clearInterval(modelsPoll);
-  }, 1500);
+    renderModels(data);  const busy = data.models.some((m) => m.download && m.download.status === "downloading");
+  if (!busy) clearInterval(modelsPoll);
+}, 1500);
 }
+
+// keep the player's re-transcribe dropdown in sync with the model library
+// (models can be downloaded after page load via the Models panel)
+const _origRenderModels = renderModels;
+renderModels = function (data) {
+  _origRenderModels(data);
+  const sel = $("#re-model");
+  if (sel) {
+    const ids = new Set((data.models || []).filter((m) => m.downloaded).map((m) => m.id));
+    const prev = sel.value;
+    loadRetransModels().then(() => {
+      if (prev && ids.has(prev)) sel.value = prev;
+    });
+  }
+};
 
 $("#backend-select").addEventListener("change", async (e) => {
   await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },

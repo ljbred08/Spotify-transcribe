@@ -289,12 +289,16 @@ def _polish_phrase(group: list[Word]) -> Line | None:
     # re-splitting which we don't do here
     if out.count(". ") + out.count("? ") + out.count("! ") > 1:
         return None
-    text = out
-    if not text.endswith((".", "?", "!")) and _ends_sentence(group):
-        text = text.rstrip(",;:") + "."
-    group[0].text = _capitalize_first(group[0].text)
+    # fold the polish onto the words themselves (verification proved the
+    # token sequences match 1:1) so the player, which renders word spans,
+    # shows the same punctuation/caps as line.text and the exports do
+    polished_tokens = [t for t in out.split() if _norm(t)]
+    for w, tok in zip(group, polished_tokens):
+        w.text = tok
+    if not out.endswith((".", "?", "!")) and _ends_sentence(group):
+        out = out.rstrip(",;:") + "."
     return Line(
-        text=text,
+        text=out,
         start=round(group[0].start, 3),
         progress=0.0,
         words=list(group),
