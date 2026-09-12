@@ -35,20 +35,15 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 YTDLP_COOKIES_FILE = _get("YTDLP_COOKIES_FILE")
 YTDLP_EXTRA = [f for f in _get("YTDLP_EXTRA").split(",") if f.strip()]
 
-# --- Transcription ---------------------------------------------------------
-TRANSCRIBE_BACKEND = _get("TRANSCRIBE_BACKEND", "auto").strip().lower()
-WHISPER_MODEL = _get("WHISPER_MODEL", "base")
-WHISPER_DEVICE = _get("WHISPER_DEVICE", "auto")
+# --- Transcription (cloud) --------------------------------------------------
 GROQ_API_KEY = _get("GROQ_API_KEY")
-GROQ_MODEL = _get("GROQ_MODEL", "whisper-large-v3")
 OPENAI_API_KEY = _get("OpenAI_API_KEY".lower()) or _get("OPENAI_API_KEY")
-OPENAI_MODEL = _get("OPENAI_MODEL", "whisper-1")
+GEMINI_API_KEY = _get("GEMINI_API_KEY") or _get("GOOGLE_API_KEY")
 
 # --- Jobs ------------------------------------------------------------------
 JOB_CONCURRENCY = max(1, int(_get("JOB_CONCURRENCY", "1")))
 
 __all__ = [
-    "DATA_DIR", "YTDLP_COOKIES_FILE", "YTDLP_EXTRA", "TRANSCRIBE_BACKEND",
-    "WHISPER_MODEL", "WHISPER_DEVICE", "GROQ_API_KEY",
-    "GROQ_MODEL", "OPENAI_API_KEY", "OPENAI_MODEL", "JOB_CONCURRENCY",
+    "DATA_DIR", "YTDLP_COOKIES_FILE", "YTDLP_EXTRA",
+    "GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "JOB_CONCURRENCY",
 ]

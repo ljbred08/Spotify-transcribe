@@ -9,14 +9,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import app.config as cfg
-from app import exporters, formatter, model_manager, transcribe
+from app import exporters, formatter, transcribe
+from app import cloud_models
 from app.models import JobStatus
 from app.pipeline import delete_track_files, pipeline, store
 from app.settings import settings
 
 app = FastAPI(title="Refrain", version="0.1.0")
-
-dl_manager = model_manager.DownloadManager()
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
@@ -110,8 +109,8 @@ def remove_track(track_id: str):
 # --- retranscribe & transcript versions ---------------------------------------
 
 class RetranscribeIn(BaseModel):
-    backend: str | None = None   # auto | parakeet | groq | openai (None = settings)
-    model: str | None = None     # local model id for this run only
+    model: str | None = None     # cloud model id for this run only
+    backend: str | None = None   # legacy alias, treated as model id
 
 
 @app.post("/api/tracks/{track_id}/retranscribe")
@@ -121,11 +120,12 @@ def retranscribe_track(track_id: str, body: RetranscribeIn):
         raise HTTPException(404, "track not found")
     if not track.audio_file or not track.audio_file.exists():
         raise HTTPException(409, "audio file missing — cannot retranscribe")
-    if body.model and model_manager.get_spec(body.model) is None:
-        raise HTTPException(400, f"unknown model '{body.model}'")
+    model_id = body.model or body.backend
+    if model_id and cloud_models.get_model(model_id) is None:
+        raise HTTPException(400, f"unknown model '{model_id}'")
     job = store.create_job(
         track.url, kind="retranscribe", track_id=track_id,
-        retranscribe_backend=body.backend, retranscribe_model=body.model)
+        retranscribe_backend=model_id, retranscribe_model=model_id)
     return {"id": job.id, "status": job.status.value, "message": job.message}
 
 
@@ -160,16 +160,26 @@ def get_settings():
 
 @app.put("/api/settings")
 def update_settings(body: dict):
-    keys = ("backend", "model", "llm_format", "llm_url", "llm_model")
+    keys = ("backend", "model", "cloud_model", "llm_format", "llm_url",
+            "llm_model", "llm_provider", "cloud_formatter_model")
     try:
         out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    if "llm_url" in body or "llm_model" in body or body.get("check_llm"):
-        formatter._status_cache["at"] = 0.0  # invalidate availability cache
+    if "llm_url" in body or "llm_model" in body or "llm_provider" in body or body.get("check_llm"):
+        formatter.invalidate_status_cache()  # invalidate availability cache
     out["llmAvailable"] = formatter.llm_available()
     out["llm"] = formatter.llm_status()
     return out
+
+
+@app.get("/api/models")
+def list_models():
+    """Dynamic cloud catalog + current settings (incl. LLM section data)."""
+    data = settings.get()
+    data["llmAvailable"] = formatter.llm_available()
+    data["llm"] = formatter.llm_status_cached()
+    return {"models": cloud_models.list_models(), "settings": data}
 
 
 @app.post("/api/llm/discover")
@@ -181,39 +191,6 @@ def discover_llm(body: dict | None = None):
         settings.update(llm_url=found)
         formatter.invalidate_status_cache()
     return {"found": found, "llm": formatter.llm_status()}
-
-
-@app.get("/api/models")
-def list_models():
-    downloads = {j["modelId"]: j for j in dl_manager.status()}
-    models = model_manager.list_models()
-    for m in models:
-        m["download"] = downloads.get(m["id"], {"status": "idle", "error": None})
-    data = settings.get()
-    data["llmAvailable"] = formatter.llm_available()
-    data["llm"] = formatter.llm_status_cached()
-    return {"models": models, "settings": data}
-
-
-@app.post("/api/models/{model_id}/download")
-def download_model(model_id: str):
-    if not model_manager.get_spec(model_id):
-        raise HTTPException(404, "unknown model")
-    return dl_manager.start(model_id)
-
-
-@app.delete("/api/models/{model_id}")
-def delete_model(model_id: str):
-    if not model_manager.get_spec(model_id):
-        raise HTTPException(404, "unknown model")
-    job = dl_manager.status(model_id)
-    if isinstance(job, dict) and job.get("status") == "downloading":
-        raise HTTPException(409, "model is currently downloading")
-    removed = model_manager.delete_model(model_id)
-    transcribe.parakeet.drop_cache(model_id)
-    if settings.get()["model"] == model_id:
-        settings.update(model="parakeet-v3")
-    return {"ok": removed}
 
 
 @app.exception_handler(404)

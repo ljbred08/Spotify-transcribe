@@ -74,6 +74,7 @@ class Pipeline:
     def _transcribe_and_format(self, job: Job, audio_path: Path):
         """Shared transcription+formatting; returns (result, lines, llm_note)."""
         from app import transcribe as tr
+        from app.cloud_models import get_model
         job_now = self.store.get_job(job.id) or job
         backend_name = job_now.retranscribe_backend
         model_id = job_now.retranscribe_model
@@ -83,26 +84,30 @@ class Pipeline:
             raise tr.TranscribeError(note)
 
         self._progress(job, JobStatus.TRANSCRIBING, note)
-        result = backend.transcribe(audio_path, lambda m: self._say(job, m),
-                                    model_id=model_id)
+        result = backend.transcribe(audio_path, lambda m: self._say(job, m))
 
         self._progress(job, JobStatus.ALIGNING, "Building synced lines…")
-        llm_enabled = settings.get()["llm_format"]
         llm_note = ""
-        if llm_enabled:
+        used_model = model_id or settings.get().get("cloud_model") or ""
+        spec = get_model(used_model)
+        audio_llm = bool(spec and spec.kind == "audio_llm")
+        if audio_llm or not settings.get()["llm_format"]:
+            # audio LLMs already return formatted, synced lines; and when
+            # formatting is disabled we assemble from timings directly
+            assembly = exporters.assemble_lines(result)
+            lines = assembly.lines
+            if audio_llm:
+                llm_note = " · formatted by audio model"
+        else:
             from app.models import Word
             words = [Word(text=w["text"], start=w["start"], end=w["end"])
                      for w in result.words]
-            self._progress(job, JobStatus.ALIGNING,
-                           "Formatting lyrics with local LLM…")
+            self._progress(job, JobStatus.ALIGNING, "Formatting lyrics with LLM…")
             fr = formatter.format_words(words)
             lines = fr.lines
             llm_note = f" · {fr.llm_lines} LLM lines"
             if fr.fallback_lines:
                 llm_note += f" ({fr.fallback_lines} auto)"
-        else:
-            assembly = exporters.assemble_lines(result)
-            lines = assembly.lines
         return result, lines, llm_note
 
     def _run_retranscribe(self, job: Job) -> None:

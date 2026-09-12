@@ -428,29 +428,33 @@
   </div>
 
   <details id="models-panel">
-    <summary>⚙︎ Models &amp; backend</summary>
+    <summary>⚙︎ Transcription models</summary>
     <div class="backend-row">
       <label for="backend-select">Backend</label>
       <select id="backend-select">
-        <option value="auto">Auto (recommended)</option>
-        <option value="parakeet">Local (Parakeet/Canary)</option>
-        <option value="groq">Groq cloud</option>
-        <option value="openai">OpenAI cloud</option>
+        <option value="cloud">Cloud (recommended)</option>
+        <option value="auto">Auto</option>
       </select>
     </div>
-    <div class="backend-row">
-      <label for="llm-toggle" title="Format lyrics (punctuation, capitalization, line breaks) with a small local LLM">LLM lyric formatting</label>
-      <input type="checkbox" id="llm-toggle" style="accent-color: var(--accent)" />
-      <span id="llm-status" class="model-status"></span>
-    </div>
+    <div id="models-list"></div>
     <div id="llm-settings">
       <div class="backend-row">
-        <label for="llm-url">Ollama URL</label>
-        <input type="text" id="llm-url" spellcheck="false" placeholder="http://127.0.0.1:11434" />
+        <label for="llm-toggle" title="Format lyrics (line breaks, capitalization) with an LLM after transcription">LLM lyric formatting</label>
+        <input type="checkbox" id="llm-toggle" style="accent-color: var(--accent)" />
+        <span id="llm-status" class="model-status"></span>
       </div>
       <div class="backend-row">
-        <label for="llm-model">Formatter model</label>
+        <label for="llm-provider">Formatter</label>
+        <select id="llm-provider">
+          <option value="ollama">Ollama (local, free)</option>
+          <option value="groq">Groq</option>
+          <option value="openai">OpenAI</option>
+        </select>
         <select id="llm-model"></select>
+      </div>
+      <div class="backend-row" id="llm-ollama-row">
+        <label for="llm-url">Ollama URL</label>
+        <input type="text" id="llm-url" spellcheck="false" placeholder="http://127.0.0.1:11434" />
       </div>
       <div class="backend-row">
         <button class="model-btn" id="llm-refresh" type="button">Check connection</button>
@@ -458,7 +462,6 @@
         <span id="llm-hint" class="model-sub"></span>
       </div>
     </div>
-    <div id="models-list"></div>
   </details>
 </aside>
 
@@ -659,14 +662,19 @@ async function loadRetransModels() {
     const data = await res.json();
     const models = data.models || data;
     const sel = $("#re-model");
+    const prev = sel.value;
     sel.innerHTML = "";
     for (const m of models) {
-      if (!m.downloaded) continue;
+      if (!m.available) continue;
+      const tag = m.kind === "audio_llm" ? " · one-step" : "";
       const opt = document.createElement("option");
       opt.value = m.id;
-      opt.textContent = m.id + (m.sizeOnDiskMb ? ` (${Math.round(m.sizeOnDiskMb / 1024 * 10) / 10} GB)` : "");
+      opt.textContent = m.name + tag;
       sel.appendChild(opt);
     }
+    const settingsModel = (data.settings || {}).cloud_model || "";
+    if (settingsModel && [...sel.options].some(o => o.value === settingsModel)) sel.value = settingsModel;
+    else if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
   } catch { /* models panel has the error handling */ }
 }
 
@@ -948,14 +956,19 @@ async function refreshModels() {
 function renderLlm(llm, enabled) {
   const t = $("#llm-toggle");
   const status = $("#llm-status");
+  const provider = llm.provider || "ollama";
+  const isOllama = provider === "ollama";
   const ok = !!(llm.online && llm.installed);
   t.checked = !!enabled;
   t.disabled = !ok;
-  status.textContent = !llm.online ? "(offline)"
+  status.textContent = !llm.online ? (isOllama ? "(offline)" : "(no API key)")
     : !llm.installed ? `(model "${llm.model}" not pulled)`
     : "✔ connected";
   status.className = "model-status" + (ok ? " ok" : " err");
-  if (document.activeElement !== $("#llm-url")) {
+  const provSel = $("#llm-provider");
+  if ([...provSel.options].some(o => o.value === provider)) provSel.value = provider;
+  $("#llm-ollama-row").style.display = isOllama ? "" : "none";
+  if (isOllama && document.activeElement !== $("#llm-url")) {
     $("#llm-url").value = llm.url || "";
   }
   const sel = $("#llm-model");
@@ -984,7 +997,8 @@ function renderLlm(llm, enabled) {
   }
   const hint = $("#llm-hint");
   if (!llm.online) {
-    hint.textContent = "Install ollama and run: ollama serve";
+    hint.textContent = isOllama ? "Install ollama and run: ollama serve"
+      : (provider === "groq" ? "Set GROQ_API_KEY" : "Set OPENAI_API_KEY");
   } else if (!llm.installed) {
     hint.textContent = `Run: ollama pull ${llm.model}`;
   } else {
@@ -995,46 +1009,33 @@ function renderLlm(llm, enabled) {
 function renderModels(data) {
   const list = $("#models-list");
   list.innerHTML = "";
+  const active = data.settings ? (data.settings.cloud_model || "") : "";
   for (const m of data.models) {
     const row = document.createElement("div");
-    row.className = "model-row" + (data.settings && data.settings.model === m.id ? " active" : "");
-    const dl = m.download || {};
-    const dlState = dl.status === "downloading" ? "downloading…"
-      : dl.status === "done" ? "ready"
-      : dl.status === "error" ? `error: ${dl.error}` : null;
+    row.className = "model-row" + (active === m.id ? " active" : "");
+    const kindBadge = m.kind === "audio_llm"
+      ? '<span class="badge green">listens + formats</span>' : "";
     row.innerHTML = `
       <div class="model-top">
-        <span class="model-name">${escapeHtml(m.id)}</span>
-        ${data.settings && data.settings.model === m.id ? '<span class="badge green">active</span>' : ""}
-        <button class="model-use">${data.settings && data.settings.model === m.id ? "in use" : "use"}</button>
+        <span class="model-name">${escapeHtml(m.name)}</span>
+        ${active === m.id ? '<span class="badge green">active</span>' : ""}
+        <button class="model-use" ${m.available ? "" : "disabled"}>${active === m.id ? "in use" : "use"}</button>
       </div>
-      <div class="model-sub">${escapeHtml(m.notes)} · ${m.languages}</div>
-      <div class="model-sub">${m.downloaded ? `on disk · ${m.sizeOnDiskMb} MB` : `not downloaded · ~${m.sizeMb} MB`}</div>
-      ${dlState ? `<div class="model-status ${dl.status === "error" ? "err" : ""}">${dl.status === "downloading" ? '<div class="spinner"></div>' : ""}${escapeHtml(dlState)}</div>` : ""}
-      <div class="model-actions">
-        ${m.downloaded ? "" : `<button class="model-btn" data-act="download">↓ Download (~${m.sizeMb} MB)</button>`}
-        ${m.downloaded ? `<button class="model-btn danger" data-act="delete">Delete</button>` : ""}
-      </div>`;
+      <div class="model-sub">${escapeHtml(m.notes)}</div>
+      ${m.available ? "" : `<div class="model-status err">needs ${m.key_env}</div>`}
+      ${kindBadge}`;
     row.querySelector(".model-use").addEventListener("click", async () => {
-      if (!m.downloaded) { alert("Download the model first."); return; }
       await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ model: m.id, backend: "parakeet" }) });
+        body: JSON.stringify({ cloud_model: m.id, backend: "cloud" }) });
       refreshModels();
-    });
-    const dlBtn = row.querySelector('[data-act="download"]');
-    if (dlBtn) dlBtn.addEventListener("click", async () => {
-      dlBtn.disabled = true;
-      await fetch(`/api/models/${m.id}/download`, { method: "POST" });
-      pollModels();
-    });
-    const delBtn = row.querySelector('[data-act="delete"]');
-    if (delBtn) delBtn.addEventListener("click", async () => {
-      if (!confirm(`Delete ${m.id} from disk?`)) return;
-      await fetch(`/api/models/${m.id}`, { method: "DELETE" });
-      refreshModels();
+      loadRetransModels();
     });
     list.appendChild(row);
   }
+  // conditional formatter dropdown: only for transcription-only models
+  const activeModel = (data.models || []).find((m) => m.id === active);
+  const needsFormatter = !activeModel || activeModel.kind !== "audio_llm";
+  $("#llm-settings").style.display = needsFormatter ? "" : "none";
 }
 
 let modelsPoll = null;
@@ -1048,24 +1049,15 @@ function pollModels() {
 }, 1500);
 }
 
-// keep the player's re-transcribe dropdown in sync with the model library
-// (models can be downloaded after page load via the Models panel)
-const _origRenderModels = renderModels;
-renderModels = function (data) {
-  _origRenderModels(data);
-  const sel = $("#re-model");
-  if (sel) {
-    const ids = new Set((data.models || []).filter((m) => m.downloaded).map((m) => m.id));
-    const prev = sel.value;
-    loadRetransModels().then(() => {
-      if (prev && ids.has(prev)) sel.value = prev;
-    });
-  }
-};
+let lastLlmEnabled = null;
 
 $("#backend-select").addEventListener("change", async (e) => {
   await fetch("/api/settings", { method: "PUT", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ backend: e.target.value }) });
+});
+
+$("#llm-provider").addEventListener("change", (e) => {
+  saveLlmSettings({ llm_provider: e.target.value });
 });
 
 $("#llm-toggle").addEventListener("change", async (e) => {
@@ -1083,7 +1075,9 @@ async function saveLlmSettings(patch) {
 }
 
 $("#llm-model").addEventListener("change", (e) => {
-  saveLlmSettings({ llm_model: e.target.value });
+  const provider = $("#llm-provider").value || "ollama";
+  if (provider === "ollama") saveLlmSettings({ llm_model: e.target.value });
+  else saveLlmSettings({ cloud_formatter_model: e.target.value });
 });
 
 let llmUrlTimer = null;

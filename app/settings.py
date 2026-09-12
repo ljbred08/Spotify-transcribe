@@ -8,14 +8,17 @@ import threading
 import app.config as cfg
 
 _DEFAULTS = {
-    "backend": "auto",
-    "model": "parakeet-v3",
+    "backend": "cloud",
+    "model": "parakeet-v3",          # legacy; unused by cloud flow
+    "cloud_model": "",                # "<provider>:<model>" or "" = auto
     "llm_format": True,
+    "llm_provider": "ollama",         # ollama | groq | openai
+    "cloud_formatter_model": "",      # model name for groq/openai formatters
     # env vars seed the initial defaults; the UI can change them at runtime
     "llm_url": os.environ.get("OLLAMA_URL", "http://127.0.0.1:11434"),
     "llm_model": os.environ.get("FORMATTER_MODEL", "qwen2.5:3b"),
 }
-_VALID_BACKENDS = {"auto", "parakeet", "groq", "openai"}
+_VALID_BACKENDS = {"cloud", "auto", "parakeet", "groq", "openai"}
 
 
 class Settings:
@@ -53,6 +56,14 @@ class Settings:
                 self._data["model"] = str(fields["model"])
             if "llm_format" in fields:
                 self._data["llm_format"] = bool(fields["llm_format"])
+            if "cloud_model" in fields:
+                self._data["cloud_model"] = str(fields["cloud_model"]).strip()
+            if "llm_provider" in fields:
+                if fields["llm_provider"] not in ("ollama", "groq", "openai"):
+                    raise ValueError("llm_provider must be ollama, groq or openai")
+                self._data["llm_provider"] = fields["llm_provider"]
+            if "cloud_formatter_model" in fields:
+                self._data["cloud_formatter_model"] = str(fields["cloud_formatter_model"]).strip()
             for key in ("llm_url", "llm_model"):
                 if key in fields:
                     val = str(fields[key]).strip()

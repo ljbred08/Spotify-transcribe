@@ -7,7 +7,8 @@ then export as **LRC / SRT / VTT / TXT / JSON**.
 Spotify URL ──▶ sfotipy metadata ──▶ ytmusicapi match ──▶ yt-dlp ─┐
 YouTube URL ──────────────────────────────────────────▶ yt-dlp ─┤
                                                                  ▼
-Parakeet v3 (ONNX, word timestamps) ◀── audio (m4a → 16 kHz WAV)
+              cloud transcription ◀── audio (m4a)
+   audio-LLM (one step, formatted + synced)  or  transcriber + LLM formatter
                                                                  │
                                   synced player UI ◀── line assembly
                                   (web, local)          + exporters
@@ -20,14 +21,14 @@ python -m venv .venv
 .venv\Scripts\activate          # Windows (bash: source .venv/Scripts/activate)
 pip install -e ".[dev]"
 
-copy .env.example .env          # optional: keys + backend selection
+copy .env.example .env          # put your API key(s) here
 uvicorn app.server:app --reload
 ```
 
 Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
-> First local transcription downloads the Parakeet v3 ONNX model from Hugging
-> Face (a one-time ~2.4 GB fetch, cached afterwards).
+> Set at least one of `GEMINI_API_KEY`, `GROQ_API_KEY` or `OPENAI_API_KEY`.
+> Gemini models listen and return formatted, word-synced lyrics in one step.
 
 ## How it works
 
@@ -35,10 +36,13 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
    metadata from the Spotify page) then matched to a YouTube Music video with
    **ytmusicapi** (duration-aware fallback included); YouTube and other URLs go
    straight to yt-dlp. Audio is pulled as m4a via ffmpeg.
-2. **Transcribe** — backend priority when `TRANSCRIBE_BACKEND=auto`:
-   **Parakeet v3 → Groq → OpenAI → faster-whisper**. Parakeet runs locally through
-   **onnx-asr** (~36× realtime on CPU, multilingual, word-level timestamps, no
-   PyTorch needed). Very long audio falls back to VAD-chunked recognition.
+2. **Transcribe** — two cloud paths, chosen per model in the Models panel:
+   - **Audio LLMs** (Gemini 2.5, GPT-4o-audio): one call listens to the song and
+     returns lyric-booklet lines with per-word timings — the model does the
+     transcription, line breaking, capitalization and lyric conventions itself.
+   - **Transcribers** (Whisper large v3 / turbo via Groq, Whisper or GPT-4o-transcribe
+     via OpenAI): return words with timestamps; a separate LLM — cloud (Groq/OpenAI)
+     or local ollama — formats them into lines, verified token-exact.
 3. **Align** — words are grouped into lines at silence gaps / length limits, so
    every line is karaoke-ready with per-word sweep.
 4. **Read along** — the player highlights the active line, sweeps each word green,
@@ -48,45 +52,39 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `TRANSCRIBE_BACKEND` | `auto` | initial backend; overridden by the app's persisted settings |
-| `GROQ_API_KEY` | — | free-tier fast transcription with word timestamps |
-| `OPENAI_API_KEY` | — | fallback cloud backend |
+| `GEMINI_API_KEY` | — | enables Gemini audio models (one-step transcription + formatting) |
+| `GROQ_API_KEY` | — | enables Whisper large v3/turbo transcription + Groq formatters |
+| `OPENAI_API_KEY` | — | enables Whisper / GPT-4o transcription + OpenAI audio/formatter models |
+| `APP_DATA_DIR` | `data` | where audio, transcripts, settings live |
+| `YTDLP_COOKIES_FILE` | — | e.g. `cookies.txt` if yt-dlp gets blocked |
+| `YTDLP_EXTRA` | — | extra yt-dlp flags, comma-separated |
 
 ## Models & backend selection
 
-The **⚙ Models & backend** panel in the app (bottom of the sidebar) manages everything:
+The **⚙ Transcription models** panel in the app (bottom of the sidebar) manages everything.
+The catalog is **dynamic**: models whose API key is present show as available; picking one
+is instant (nothing to download). Choices persist in `data/settings.json` and apply to
+the next job (no restart).
 
-- **Download / delete** local ONNX models (stored under `data/models/<id>/`, so deleting
-  is instant and safe)
-- **Pick the active model** — every English/multilingual onnx-asr model with word-timestamp
-  support (the whisper exports return no timestamps, so they can't drive karaoke)
-- **Pick the backend** — auto, local, Groq, or OpenAI
-
-Choices persist in `data/settings.json` and apply to the next job (no restart).
-
-| Model | Size | Good at |
+| Model | Kind | Good at |
 | --- | --- | --- |
-| `parakeet-v3` | ~2.5 GB | Best all-round: fast TDT decoder, handles singing, 25 languages |
-| `parakeet-v2` | ~2.5 GB | English-only predecessor of v3 |
-| `parakeet-unified-en` | ~2.5 GB | Unified offline/streaming RNNT with built-in punctuation & capitalization (community export) |
-| `parakeet-ctc-0.6b` | ~2.5 GB | CTC decoder variant (English) |
-| `parakeet-rnnt-0.6b` | ~2.5 GB | RNN-T decoder variant (English) |
-| `canary-1b-v2` | ~4 GB | Largest Canary; spoken word — weak on singing |
-| `canary-1b-flash` | ~3.6 GB | Spoken word (podcasts); weak on singing |
-| `canary-180m-flash` | ~780 MB | Tiny + fast spoken word; weak on singing |
-| `gigaam-multilingual-ctc` | ~900 MB | Compact multilingual CTC (70+ languages, best on CIS) |
-| `gigaam-multilingual-large-ctc` | ~2.3 GB | Large multilingual CTC (70+ languages) |
+| `gemini:gemini-2.5-flash` | audio LLM | one-step: listens, returns formatted synced lyrics |
+| `gemini:gemini-2.5-pro` | audio LLM | highest quality audio understanding; slower |
+| `openai:gpt-4o-audio-preview` | audio LLM | one-step via OpenAI |
+| `groq:whisper-large-v3` | transcriber | fast word-level timestamps; best value |
+| `groq:whisper-large-v3-turbo` | transcriber | cheaper/faster, slightly lower accuracy |
+| `openai:whisper-1` | transcriber | word-level timestamps |
+| `openai:gpt-4o-transcribe` | transcriber | strongest transcription; segment timestamps (words interpolated) |
 
-Community exports without onnx-asr's standard layout (like `parakeet-unified-en`) are
-normalized automatically after download: graph files renamed, a `config.json` synthesized,
-and the vocab rebuilt from the authoritative token map (including the `<blk>` blank token
-and SentencePiece word-boundary markers the export strips).
+When a **transcriber** is selected, the panel also shows the **LLM lyric formatting**
+section (the formatter stage); select an **audio LLM** and it hides — the model already
+formats. Formatters: local ollama (free), Groq or OpenAI chat models.
 
 ## Re-transcribing & versions
 
-Every track has a **↻ Re-transcribe** button in the player: re-run ASR on the *existing*
-audio with any downloaded model (pick it in the dropdown next to the button) — useful for
-A/B-ing models or upgrading when a better one lands. No re-download of the song.
+Every track has a **↻ Re-transcribe** button in the player: re-run transcription on the
+*existing* audio with any available cloud model (pick it in the dropdown next to the
+button) — useful for A/B-ing models. No re-download of the song.
 
 Each transcription run creates a **new version** (`v1`, `v2`, …) alongside the previous
 ones — nothing is overwritten, so a worse re-run can simply be rolled back. Version pills
@@ -94,19 +92,15 @@ next to the button switch the active version; every export uses the active versi
 
 ## LLM lyric formatting
 
-With [ollama](https://ollama.com) running, transcripts are auto-polished (punctuation,
-capitalization, sentence-aware line breaks) by a small local model — default `qwen2.5:3b`
-(`FORMATTER_MODEL` in `.env`, needs ~2 GB). Three safety tiers guarantee the words and
-timings are never corrupted by the LLM:
-
-1. chunk-level reformatting, verified word-by-word (order-preserving),
-2. per-phrase polish on timing-derived phrases (used when the model "recites" famous
-   songs from memory instead of copying — e.g. the rickroll),
-3. raw phrases, unchanged.
-
-Line breaks come from **word timings** (silence gaps), not from the LLM, so karaoke
-sweep stays in sync regardless of which tier produced a line. Toggle in the Models panel
-(`llm_format`); off = deterministic silence-gap splitting.
+Used on the **transcriber** path (audio LLMs return formatted lines themselves). The
+formatter provider is selectable: local [ollama](https://ollama.com) (default
+`qwen2.5:3b`, needs ~2 GB), Groq (`llama-3.3-70b-versatile`) or OpenAI (`gpt-4o-mini`).
+The LLM's only job is to re-emit the exact transcript with line breaks inserted so each
+line reads like a printed lyric booklet; the result is verified **token-exact** against
+the input (retrying with a plainer prompt when the model touches words), then lyric
+conventions are applied deterministically: no terminal periods, kept `?`/`!`/commas,
+corrected capitalization. The LLM can therefore never add, drop, or rewrite a word —
+timing integrity is guaranteed by construction. Toggle in the Models panel (`llm_format`).
 
 ## Configuration (`.env`)
 

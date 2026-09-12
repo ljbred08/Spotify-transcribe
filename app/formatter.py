@@ -64,15 +64,26 @@ def _clean_token(text: str) -> str:
     return base or text
 
 
-def _llm_config() -> "tuple[str, str]":
-    """(url, model) from persisted settings, falling back to env/defaults."""
+def _llm_config() -> "tuple[str, str, str]":
+    """(provider, url_or_base, model) from persisted settings.
+
+    provider is ollama | groq | openai; url_or_base is the ollama URL for
+    ollama, the API base for cloud providers (key still comes from env).
+    """
     try:
         from app.settings import settings
         s = settings.get()
-        return s.get("llm_url") or DEFAULT_OLLAMA_URL, \
-            s.get("llm_model") or DEFAULT_FORMATTER_MODEL
+        provider = s.get("llm_provider") or "ollama"
+        model = s.get("llm_model") or DEFAULT_FORMATTER_MODEL
+        if provider == "groq":
+            return provider, "https://api.groq.com/openai/v1", \
+                s.get("cloud_formatter_model") or "llama-3.3-70b-versatile"
+        if provider == "openai":
+            return provider, "https://api.openai.com/v1", \
+                s.get("cloud_formatter_model") or "gpt-4o-mini"
+        return "ollama", s.get("llm_url") or DEFAULT_OLLAMA_URL, model
     except Exception:
-        return DEFAULT_OLLAMA_URL, DEFAULT_FORMATTER_MODEL
+        return "ollama", DEFAULT_OLLAMA_URL, DEFAULT_FORMATTER_MODEL
 
 
 _status_cache: dict = {"at": 0.0, "data": None}
@@ -81,19 +92,28 @@ _STATUS_TTL = 5.0  # seconds; ollama polling happens on every settings fetch
 
 def llm_status() -> dict:
     """Reachability + the active config, for the UI's LLM section."""
-    url, model = _llm_config()
+    import os
+    provider, url, model = _llm_config()
     models: list[str] = []
     online = False
-    try:
-        with httpx.Client(timeout=2.5) as c:
-            tags = c.get(f"{url}/api/tags").json()
-        models = sorted(m.get("name", "") for m in tags.get("models", []))
-        online = True
-    except Exception:
-        online = False
-    # exact or tag-prefix match ("qwen2.5:3b" also matches "qwen2.5:3b-instruct")
-    installed = model in models or any(m.startswith(model) for m in models)
-    return {"url": url, "model": model, "online": online,
+    if provider in ("groq", "openai"):
+        key_env = "GROQ_API_KEY" if provider == "groq" else "OPENAI_API_KEY"
+        online = bool(os.environ.get(key_env, "").strip())
+        # cloud catalogs are huge; surface the models we suggest
+        models = (["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
+                  if provider == "groq" else ["gpt-4o-mini", "gpt-4o"])
+        installed = True
+    else:
+        try:
+            with httpx.Client(timeout=2.5) as c:
+                tags = c.get(f"{url}/api/tags").json()
+            models = sorted(m.get("name", "") for m in tags.get("models", []))
+            online = True
+        except Exception:
+            online = False
+        # exact or tag-prefix match ("qwen2.5:3b" also matches "qwen2.5:3b-instruct")
+        installed = model in models or any(m.startswith(model) for m in models)
+    return {"provider": provider, "url": url, "model": model, "online": online,
             "installed": installed, "models": models}
 
 
@@ -163,17 +183,35 @@ def llm_available() -> bool:
 
 
 def _chat(prompt: str) -> str | None:
-    url, model = _llm_config()
+    """One chat completion via the configured provider (ollama or cloud)."""
+    import os
+    provider, url, model = _llm_config()
     try:
         with httpx.Client(timeout=240.0) as c:
-            r = c.post(f"{url}/api/chat", json={
+            if provider == "ollama":
+                r = c.post(f"{url}/api/chat", json={
+                    "model": model,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "keep_alive": "30m",
+                    "options": {"temperature": 0.0, "num_ctx": 4096, "num_predict": 500},
+                })
+                return r.json()["message"]["content"]
+            # OpenAI-compatible (groq / openai)
+            key_env = "GROQ_API_KEY" if provider == "groq" else "OPENAI_API_KEY"
+            key = os.environ.get(key_env, "").strip()
+            if not key:
+                return None
+            r = c.post(f"{url}/chat/completions", headers={
+                "Authorization": f"Bearer {key}",
+            }, json={
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "stream": False,
-                "keep_alive": "30m",
-                "options": {"temperature": 0.0, "num_ctx": 4096, "num_predict": 500},
+                "temperature": 0.0,
             })
-        return r.json()["message"]["content"]
+            if r.status_code != 200:
+                return None
+            return r.json()["choices"][0]["message"]["content"]
     except Exception:
         return None
 
