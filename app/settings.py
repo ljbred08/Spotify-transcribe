@@ -18,6 +18,9 @@ _DEFAULTS = {
     "transcribe_model": "",            # block 1 model (api_model string)
     "keys": {},                        # provider id -> API key (UI-saved)
     "llm_format": True,
+    # --- advanced sampling params (mutually exclusive: one at 1.0) ----------
+    "temperature": 0.0,                # greedy by default (top_p = 1)
+    "top_p": 1.0,
     # --- block 2 (formatter; only used with transcribe-only models) ----------
     "llm_provider": "ollama",
     "llm_model": "",                   # api model for the formatter provider
@@ -105,6 +108,28 @@ class Settings:
                 self._data["transcribe_model"] = str(fields["transcribe_model"]).strip()
             if "llm_format" in fields:
                 self._data["llm_format"] = bool(fields["llm_format"])
+            if "temperature" in fields:
+                try:
+                    temp = float(fields["temperature"])
+                except (TypeError, ValueError):
+                    raise ValueError("temperature must be a number")
+                if not 0.0 <= temp <= 2.0:
+                    raise ValueError("temperature must be between 0 and 2")
+                self._data["temperature"] = temp
+                # sliders are locked: moving temperature off neutral (1)
+                # snaps top_p back to its neutral 1, never both active
+                if temp != 1.0 and self._data["top_p"] != 1.0:
+                    self._data["top_p"] = 1.0
+            if "top_p" in fields:
+                try:
+                    top_p = float(fields["top_p"])
+                except (TypeError, ValueError):
+                    raise ValueError("top_p must be a number")
+                if not 0.05 <= top_p <= 1.0:
+                    raise ValueError("top_p must be between 0.05 and 1")
+                self._data["top_p"] = top_p
+                if top_p != 1.0 and self._data["temperature"] != 1.0:
+                    self._data["temperature"] = 1.0
             if "llm_provider" in fields:
                 val = str(fields["llm_provider"])
                 if val not in _VALID_FORMATTER_PROVIDERS:

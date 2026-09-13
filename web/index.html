@@ -162,6 +162,16 @@
     padding: 6px 8px; font-size: 12.5px; outline: none; min-width: 0;
   }
   .backend-row input[type="text"]:focus { border-color: #2f3950; }
+  .adv-block { border-top: 1px solid var(--line); margin-top: 8px; }
+  .adv-block summary {
+    cursor: pointer; padding: 10px 12px; color: var(--muted);
+    font-weight: 600; font-size: 12px; user-select: none;
+  }
+  .adv-block summary:hover { color: var(--text); }
+  .backend-row input[type="range"] {
+    flex: 1; min-width: 0; accent-color: var(--accent); height: 18px;
+  }
+  .backend-row .key-state { min-width: 34px; text-align: right; }
   #llm-settings { padding-bottom: 4px; }
   #llm-settings[disabled] { opacity: .6; }
   #llm-hint { flex: 1; font-size: 11px; }
@@ -497,6 +507,20 @@
         <span id="t-key-state" class="key-state"></span>
       </div>
       <div class="backend-row"><span id="t-active" class="model-sub"></span></div>
+      <details class="adv-block">
+        <summary>Advanced</summary>
+        <div class="backend-row">
+          <label for="t-temp">Temperature</label>
+          <input type="range" id="t-temp" min="0" max="2" step="0.05" />
+          <span id="t-temp-val" class="key-state"></span>
+        </div>
+        <div class="backend-row">
+          <label for="t-topp">top_p</label>
+          <input type="range" id="t-topp" min="0.05" max="1" step="0.05" />
+          <span id="t-topp-val" class="key-state"></span>
+        </div>
+        <div class="backend-row"><span class="model-sub">Locked: moving one slider snaps the other back to 1, so the pair is always valid.</span></div>
+      </details>
     </div>
     <div class="cfg-block" id="fmt-block">
       <div class="block-title">Lyrics formatter <span class="block-note">— for transcribe-only models</span></div>
@@ -1193,6 +1217,7 @@ function renderConfig(data) {
   const activeId = `${tProv}:${$("#t-model").value}`;
   const active = tModels.find((m) => m.id === activeId);
   $("#t-active").textContent = active ? active.notes : "";
+  samplingLabels(s.temperature ?? 0, s.top_p ?? 1);
   // --- block 2: formatter (only for transcribe-only models) ---
   const isAudio = active && active.kind === "audio_llm";
   $("#fmt-block").style.display = isAudio ? "none" : "";
@@ -1247,6 +1272,37 @@ async function saveKey(inputId, provider) {
 }
 
 $("#t-key").addEventListener("change", () => saveKey("t-key", $("#t-provider").value));
+
+/* --- advanced sampling sliders (locked pair) ---
+   Rule: the two values are mutually exclusive. Each slider's neutral
+   value is 1; moving one off 1 snaps the other back to 1, so the pair
+   (temperature, top_p) can never be "both active" — e.g. temp 0 with
+   top_p < 1, which voxtral's provider rejects outright. Defaults are
+   the greedy pair: temperature 0, top_p 1. */
+const fmtNum = (v) => (+(+v).toFixed(2)).toString();
+
+function samplingLabels(temp, topp) {
+  $("#t-temp").value = temp;
+  $("#t-topp").value = topp;
+  $("#t-temp-val").textContent = fmtNum(temp);
+  $("#t-topp-val").textContent = fmtNum(topp);
+}
+
+$("#t-temp").addEventListener("input", async () => {
+  const temp = +$("#t-temp").value;
+  const topp = (temp !== 1 && +$("#t-topp").value !== 1) ? 1 : +$("#t-topp").value;
+  samplingLabels(temp, topp);
+  const s = await putSettings({ temperature: temp, top_p: topp });
+  if (s && typeof s.temperature === "number") samplingLabels(s.temperature, s.top_p);
+});
+
+$("#t-topp").addEventListener("input", async () => {
+  const topp = +$("#t-topp").value;
+  const temp = (topp !== 1 && +$("#t-temp").value !== 1) ? 1 : +$("#t-temp").value;
+  samplingLabels(temp, topp);
+  const s = await putSettings({ temperature: temp, top_p: topp });
+  if (s && typeof s.temperature === "number") samplingLabels(s.temperature, s.top_p);
+});
 
 /* --- block 2 events --- */
 $("#llm-provider").addEventListener("change", async () => {

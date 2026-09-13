@@ -255,10 +255,12 @@ class OpenRouterAudio:
         b64 = base64.b64encode(_wav_bytes(wav)).decode("ascii")
 
         def call_fn(prompt: str, *, force_json: bool) -> str:
+            from app.settings import settings
+            s = settings.get()
             body = {
                 "model": self.m.api_model,
-                "temperature": 0.0,
-                "top_p": 1,          # voxtral: greedy (temp 0) requires top_p == 1
+                "temperature": s.get("temperature", 0.0),
+                "top_p": s.get("top_p", 1.0),
                 "max_tokens": 65536,
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": prompt},
@@ -315,7 +317,10 @@ class GeminiAudio:
                f"{model_id}:generateContent?key={key}")
 
         def call_fn(prompt: str, *, force_json: bool) -> str:
-            gen_cfg = {"temperature": 0.0, "maxOutputTokens": 65536}
+            from app.settings import settings
+            s = settings.get()
+            gen_cfg = {"temperature": s.get("temperature", 0.0),
+                       "maxOutputTokens": 65536}
             if force_json:
                 gen_cfg["responseMimeType"] = "application/json"
             body = {
@@ -362,9 +367,12 @@ class OpenAIAudio:
         b64 = base64.b64encode(data).decode("ascii")
 
         def call_fn(prompt: str, *, force_json: bool) -> str:
+            from app.settings import settings
+            s = settings.get()
             body = {
                 "model": self.m.api_model,
-                "temperature": 0.0,
+                "temperature": s.get("temperature", 0.0),
+                "top_p": s.get("top_p", 1.0),
                 "modalities": ["text"],
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": prompt},
