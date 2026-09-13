@@ -151,33 +151,43 @@ def _parse_enhanced_lrc(raw: str | None) -> list[dict] | None:
             continue  # metadata tag ([ti:], [ar:], …) or noise
         t0 = _tag_seconds(*m.groups())
         rest = s[m.end():]
-        words: list[tuple[float, str]] = []
         tags = list(_WORD_TS.finditer(rest))
+        # (start, token, explicit_end|None) per word
+        wlist: list[tuple[float, str, float | None]] = []
         if tags:
             lead = rest[:tags[0].start()].strip()
             if lead:
-                words.extend((t0, tok) for tok in lead.split())
+                wlist.extend((t0, tok, None) for tok in lead.split())
             for i, wm in enumerate(tags):
                 wt = _tag_seconds(*wm.groups())
                 nxt = tags[i + 1].start() if i + 1 < len(tags) else len(rest)
                 chunk = rest[wm.end():nxt].strip()
                 if chunk:
-                    words.extend((wt, tok) for tok in chunk.split())
+                    wlist.extend((wt, tok, None) for tok in chunk.split())
+                elif wlist:
+                    # trailing/empty tag: explicit end for the last open word
+                    # (Gemini ends lines with <mm:ss.xx> after the final word)
+                    for j in range(len(wlist) - 1, -1, -1):
+                        if wlist[j][2] is None:
+                            wlist[j] = (wlist[j][0], wlist[j][1], wt)
+                            break
         else:
-            words.extend((t0, tok) for tok in rest.split())
-        if words:
-            entries.append((t0, words))
+            wlist.extend((t0, tok, None) for tok in rest.split())
+        if wlist:
+            entries.append((t0, wlist))
     if not entries:
         return None
     entries.sort(key=lambda x: x[0])
     adj = offset_ms / 1000.0
     lines: list[dict] = []
-    for i, (_t0, words) in enumerate(entries):
+    for i, (_t0, wlist) in enumerate(entries):
         ws = []
-        for j, (wt, tok) in enumerate(words):
+        for j, (wt, tok, xend) in enumerate(wlist):
             start = wt - adj
-            if j + 1 < len(words):
-                end = words[j + 1][0] - adj
+            if xend is not None:
+                end = xend - adj
+            elif j + 1 < len(wlist):
+                end = wlist[j + 1][0] - adj
             elif i + 1 < len(entries):
                 end = entries[i + 1][1][0][0] - adj
             else:
@@ -248,7 +258,9 @@ def _lines_to_result(lines: list[dict], backend: str) -> TranscriptionResult:
     segments = [Segment(text=ln["text"],
                         start=ln["words"][0]["start"],
                         end=ln["words"][-1]["end"]) for ln in kept_lines]
-    return TranscriptionResult(segments=segments, words=words, backend=backend)
+    return TranscriptionResult(
+        segments=segments, words=words, backend=backend,
+        groups=[ln["words"] for ln in kept_lines])
 
 
 def _run_audio_llm(call_fn, progress, backend_id: str,

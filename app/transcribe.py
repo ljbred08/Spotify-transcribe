@@ -27,6 +27,7 @@ class TranscriptionResult:
     segments: list[Segment]
     words: list[dict]  # {text, start, end}
     backend: str
+    groups: list[list[dict]] | None = None  # model's own final lyric lines
 
 
 class TranscribeError(RuntimeError):

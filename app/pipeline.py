@@ -9,7 +9,7 @@ from pathlib import Path
 
 import app.config as cfg
 from app import downloader, exporters, formatter, transcribe
-from app.models import Job, JobStatus, Line, Store, Track
+from app.models import Job, JobStatus, Line, Store, Track, Word
 from app.settings import settings
 
 store = Store()
@@ -96,15 +96,26 @@ class Pipeline:
             used_model = resolved_transcribe_model()
         spec = get_model(used_model)
         audio_llm = bool(spec and spec.kind == "audio_llm")
-        if audio_llm or not settings.get()["llm_format"]:
-            # audio LLMs already return formatted, synced lines; and when
-            # formatting is disabled we assemble from timings directly
+        if result.groups:
+            # Audio LLMs return finished lyric lines — keep the model's own
+            # grouping verbatim (no re-splitting); timings stay word-exact.
+            lines = [
+                Line(text=" ".join(w["text"] for w in g),
+                     start=round(g[0]["start"], 3), progress=0.0,
+                     words=[Word(text=w["text"], start=w["start"], end=w["end"])
+                            for w in g])
+                for g in result.groups
+            ]
+            if audio_llm:
+                llm_note = " · formatted by audio model"
+        elif audio_llm or not settings.get()["llm_format"]:
+            # grouped results without preformed lines (e.g. validation dropped
+            # a whole line) and formatting-disabled runs assemble from timings
             assembly = exporters.assemble_lines(result)
             lines = assembly.lines
             if audio_llm:
                 llm_note = " · formatted by audio model"
         else:
-            from app.models import Word
             words = [Word(text=w["text"], start=w["start"], end=w["end"])
                      for w in result.words]
             self._progress(job, JobStatus.ALIGNING, "Formatting lyrics with LLM…")

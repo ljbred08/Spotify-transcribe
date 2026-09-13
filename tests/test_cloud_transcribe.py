@@ -49,6 +49,25 @@ def test_parse_enhanced_lrc_fenced_and_plain_lines():
     assert toks[0]["s"] == 10.0 and toks[-1]["e"] == 20.0
 
 
+def test_trailing_tags_set_final_word_end_times():
+    # Real Gemini output: lines end with a trailing <mm:ss.xx> end-time tag.
+    lrc = """[ti:Never Gonna Give You Up]
+[ar:Rick Astley]
+
+[00:18.70]We're <00:19.12>no <00:19.46>strangers <00:20.10>to <00:21.08>love <00:21.66>
+[00:23.10]You <00:23.36>know <00:23.64>the <00:23.90>rules <00:24.78>and <00:25.60>so <00:25.86>do <00:26.14>I <00:26.54>"""
+    lines = _parse_enhanced_lrc(lrc)
+    assert lines is not None and len(lines) == 2
+    love = lines[0]["words"][-1]
+    assert love["t"] == "love"
+    assert love["s"] == 21.08 and love["e"] == 21.66   # from the trailing tag
+    i_end = lines[1]["words"][-1]
+    assert i_end["t"] == "I" and i_end["e"] == 26.54
+    # the model's line grouping is preserved exactly
+    assert lines[0]["text"] == "We're no strangers to love"
+    assert lines[1]["text"] == "You know the rules and so do I"
+
+
 def test_parse_enhanced_lrc_offset_and_garbage():
     off = _parse_enhanced_lrc("[offset:+1000]\n[00:10.00]<00:10.00>shifted <00:10.50>words")
     assert off is not None
