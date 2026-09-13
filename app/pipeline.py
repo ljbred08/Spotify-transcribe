@@ -108,8 +108,10 @@ class Pipeline:
         fired = threading.Event()
 
         def watchdog() -> None:
-            if not fired.wait(timeout=max(0.0, deadline - time.monotonic())):
-                return  # worker finished first
+            # Event.wait returns True when the WORKER finished (event set),
+            # False on genuine timeout — inverted from a naive reading
+            if fired.wait(timeout=max(0.0, deadline - time.monotonic())):
+                return  # worker finished first: nothing to do
             self.store.request_cancel(job.id)
             self.store.update_job(
                 job.id, status=JobStatus.ERROR,
@@ -151,7 +153,19 @@ class Pipeline:
             used_model = resolved_transcribe_model()
         spec = get_model(used_model)
         audio_llm = bool(spec and spec.kind == "audio_llm")
-        if result.groups:
+        # Sanity guard: some audio models return correct words/timings but no
+        # line breaks at all (one whole-song "line"). Trust grouping only when
+        # it looks like lyric lines; otherwise assemble from timings.
+        def _groups_usable(groups) -> bool:
+            if not groups:
+                return False
+            total_words = sum(len(g) for g in groups)
+            biggest = max(len(g) for g in groups)
+            # a real lyric line is rarely >30 words; a blob is most of the song
+            return not (len(groups) <= 2 and total_words > 40 and
+                        biggest > total_words * 0.6)
+
+        if result.groups and _groups_usable(result.groups):
             # Audio LLMs return finished lyric lines — keep the model's own
             # grouping verbatim (no re-splitting); timings stay word-exact.
             lines = [

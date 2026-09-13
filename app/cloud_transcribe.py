@@ -22,7 +22,6 @@ import json
 import re
 import subprocess
 import tempfile
-import wave
 from pathlib import Path
 
 import httpx
@@ -64,7 +63,9 @@ class TranscriptProvider:
             data = {
                 "model": self.m.api_model,
                 "response_format": "verbose_json",
-                "timestamp_granularities[]": "word,segment",
+                # repeated form fields — one comma-joined string is a 400
+                # (Groq validates each value against the enum)
+                "timestamp_granularities[]": ["word", "segment"],
             }
             with httpx.Client(timeout=600.0) as client:
                 resp = client.post(f"{self._base_url()}/audio/transcriptions",
@@ -200,21 +201,20 @@ def _run_audio_llm(call_fn, progress, backend_id: str,
 
 
 def _to_mp16k(audio_path: Path) -> Path:
-    """ffmpeg the audio to 16 kHz mono WAV (the format audio APIs accept)."""
-    out = Path(tempfile.gettempdir()) / f"refrain_{audio_path.stem}_16k.wav"
+    """ffmpeg the audio to a compact mono MP3 for inline audio parts.
+
+    MP3, not WAV: a full-song 16 kHz mono WAV base64-overflows small
+    context windows (e.g. gemini-3.5-flash-lite's 32k tokens) with a 400.
+    A 32 kbps mono MP3 of the same song is ~10x smaller.
+    """
+    out = Path(tempfile.gettempdir()) / f"refrain_{audio_path.stem}_16k.mp3"
     proc = subprocess.run(
         ["ffmpeg", "-y", "-i", str(audio_path), "-ac", "1", "-ar", "16000",
-         "-sample_fmt", "s16", str(out)],
+         "-b:a", "32k", str(out)],
         capture_output=True, text=True)
     if proc.returncode != 0 or not out.exists():
         raise TranscribeError("ffmpeg failed to convert audio for the audio model")
     return out
-
-
-def _wav_bytes(path: Path) -> bytes:
-    """File bytes via the wave module (validates our ffmpeg output)."""
-    with wave.open(str(path), "rb") as w:
-        return path.read_bytes()
 
 
 def _post_with_retries(post_fn, progress, label: str):
@@ -252,7 +252,7 @@ class OpenRouterAudio:
             raise TranscribeError("OpenRouter API key missing")
         progress(f"Preparing audio for {self.m.name} (OpenRouter)…")
         wav = _to_mp16k(audio_path)
-        b64 = base64.b64encode(_wav_bytes(wav)).decode("ascii")
+        b64 = base64.b64encode(wav.read_bytes()).decode("ascii")
 
         def call_fn(prompt: str, *, force_json: bool) -> str:
             from app.settings import settings
@@ -265,7 +265,7 @@ class OpenRouterAudio:
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "input_audio",
-                     "input_audio": {"data": b64, "format": "wav"}},
+                     "input_audio": {"data": b64, "format": "mp3"}},
                 ]}],
             }
             if self.m.api_model.startswith("openai/"):

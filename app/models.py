@@ -162,14 +162,13 @@ class Store:
             job = self._jobs.get(job_id)
             if not job:
                 return None
-            # terminal jobs are frozen: progress writes from a still-running
-            # thread must not resurrect a canceled/errored job
-            if job.status in TERMINAL_STATUSES and "status" in fields:
-                if fields["status"] is not JobStatus.ERROR:
-                    fields.pop("status")
-                    fields.pop("message", None)
-                elif "message" not in fields:
-                    fields.pop("status")
+            # terminal jobs are frozen: a late worker-thread write must never
+            # change a job's end state — including ERROR→ERROR, else the
+            # worker's follow-up exception can overwrite the watchdog's
+            # "Timed out after Ns" message with a less useful one
+            if job.status in TERMINAL_STATUSES:
+                fields.pop("status", None)
+                fields.pop("message", None)
             for key, value in fields.items():
                 setattr(job, key, value)
             job.updated_at = time.time()

@@ -11,6 +11,9 @@ import re
 
 _LINE_TS = re.compile(r"^\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _WORD_TS = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
+# bare bracket timestamps that appear MID-text (not as a line tag) — some
+# models (e.g. gemini flash-lite) emit these instead of proper <> word tags
+_ANY_BRACKET = re.compile(r"\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
 _OFFSET_TAG = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]", re.I)
 
 
@@ -46,18 +49,38 @@ def parse_enhanced(raw: str | None) -> list[dict] | None:
     offset_ms = 0.0
     # (line_start, [(word_start, token, explicit_end|None), ...]) per line
     entries: list[tuple[float, list[tuple[float, str, float | None]]]] = []
+    def _angle(m: re.Match) -> str:
+        inner = f"{m.group(1)}:{m.group(2)}"
+        if m.group(3):
+            inner += f".{m.group(3)}"
+        return f"<{inner}>"
+
     for ln in content.splitlines():
         s = ln.strip()
         om = _OFFSET_TAG.match(s)
         if om:
             offset_ms = float(om.group(1))
             continue
+        # normalize MID-TEXT bracket timestamps into <> word tags (some
+        # models emit [mm:ss:cs] between words instead of proper LRC); a
+        # leading line-position tag is left for _LINE_TS below
+        s = _ANY_BRACKET.sub(lambda m: m.group(0) if m.start() == 0
+                             else _angle(m), s)
         m = _LINE_TS.match(s)
         if not m:
-            continue  # metadata tag ([ti:], [ar:], …) or noise
-        t0 = _tag_seconds(*m.groups())
-        rest = s[m.end():]
-        tags = list(_WORD_TS.finditer(rest))
+            # tolerate tag-only lines (no leading [mm:ss.xx] line tag): the
+            # first word tag carries the line start
+            wm0 = _WORD_TS.search(s)
+            if not wm0:
+                continue  # metadata tag ([ti:], [ar:], …) or noise
+            t0 = _tag_seconds(*wm0.groups())
+            rest = (s[:wm0.start()].strip() + " " + s[wm0.end():]).strip()
+            # re-inject the words that preceded the first tag at line start
+            tags = list(_WORD_TS.finditer(rest))
+        else:
+            t0 = _tag_seconds(*m.groups())
+            rest = s[m.end():]
+            tags = list(_WORD_TS.finditer(rest))
         # (start, token, explicit_end|None) per word
         wlist: list[tuple[float, str, float | None]] = []
         if tags:

@@ -21,7 +21,7 @@ _DEFAULTS = {
     # --- advanced sampling params (mutually exclusive: one at 1.0) ----------
     "temperature": 0.0,                # greedy by default (top_p = 1)
     "top_p": 1.0,
-    "transcribe_timeout": 60,          # seconds; watchdog for slow models
+    "transcribe_timeout": 180,        # seconds; watchdog for slow models
     # --- block 2 (formatter; only used with transcribe-only models) ----------
     "llm_provider": "ollama",
     "llm_model": "",                   # api model for the formatter provider
