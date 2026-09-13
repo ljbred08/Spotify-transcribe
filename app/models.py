@@ -250,27 +250,24 @@ class Store:
     def _save_transcript_locked(self, track_id: str, lines: list[Line],
                                 *, backend: str | None,
                                 note: str | None) -> int:
-        payload = [
-            {
-                "text": line.text,
-                "start": round(line.start, 3),
-                "words": [
-                    {"text": w.text, "start": round(w.start, 3), "end": round(w.end, 3)}
-                    for w in line.words
-                ],
-            }
-            for line in lines
-        ]
+        # Canonical storage is Enhanced LRC text (word-level tags) so the
+        # format we get from audio LLMs is exactly what we keep; it is
+        # re-parsed on every load, so parser improvements apply to every
+        # stored version retroactively.
+        from app.lrc import serialize
+        track = self._tracks.get(track_id)
+        title = track.title if track else ""
+        artist = track.artist if track else ""
         self._migrate_legacy_transcript(track_id)
         d = self._transcript_dir(track_id)
         d.mkdir(parents=True, exist_ok=True)
         index = self._read_versions_index(track_id) or {"active": 0, "versions": []}
         version = (max((v["version"] for v in index["versions"]), default=0)) + 1
-        (d / f"v{version}.json").write_text(
-            json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+        (d / f"v{version}.lrc").write_text(
+            serialize(title, artist, lines), encoding="utf-8")
         index["versions"].append({
             "version": version, "createdAt": time.time(), "backend": backend,
-            "lines": len(lines), "note": note,
+            "lines": len(lines), "note": note, "fmt": "lrc",
         })
         index["active"] = version
         self._write_versions_index(track_id, index)
@@ -285,7 +282,28 @@ class Store:
         index = self._read_versions_index(track_id)
         if index is None:
             return None
-        path = self._transcript_dir(track_id) / f"v{index.get('active', 0)}.json"
+        d = self._transcript_dir(track_id)
+        active = index.get("active", 0)
+        # Enhanced LRC is canonical; parse it fresh on every load.
+        lrc_path = d / f"v{active}.lrc"
+        if lrc_path.exists():
+            from app.lrc import parse_enhanced
+            try:
+                parsed = parse_enhanced(lrc_path.read_text(encoding="utf-8"))
+            except OSError:
+                return None
+            if not parsed:
+                return None
+            return [
+                Line(text=ln["text"],
+                     start=ln["words"][0]["s"],
+                     progress=0.0,
+                     words=[Word(text=w["t"], start=w["s"], end=w["e"])
+                            for w in ln["words"]])
+                for ln in parsed
+            ]
+        # legacy JSON versions (pre-LRC storage) still load as before
+        path = d / f"v{active}.json"
         if not path.exists():
             return None
         try:

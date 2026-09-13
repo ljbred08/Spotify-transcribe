@@ -28,6 +28,7 @@ from pathlib import Path
 import httpx
 
 from app.cloud_models import CloudModel, get_model, provider_key
+from app.lrc import parse_enhanced as _parse_enhanced_lrc
 from app.transcribe import Segment, TranscribeError, TranscriptionResult, _words_from_segments
 
 
@@ -110,92 +111,6 @@ Rules:
 - Transcribe exactly what is sung, including repeated choruses; do not censor or "fix" words.
 - If a section is instrumental, skip it (no line for it).
 """
-
-
-# --- Enhanced LRC parsing --------------------------------------------------------
-
-_LINE_TS = re.compile(r"^\[(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?\]")
-_WORD_TS = re.compile(r"<(\d{1,3}):(\d{1,2})(?:[.:](\d{1,3}))?>")
-_OFFSET_TAG = re.compile(r"^\[offset:\s*([+-]?\d+)\s*\]", re.I)
-
-
-def _tag_seconds(mm: str, ss: str, frac: str | None) -> float:
-    t = int(mm) * 60 + int(ss)
-    if frac:
-        t += int(frac) / (10 ** len(frac))
-    return t
-
-
-def _parse_enhanced_lrc(raw: str | None) -> list[dict] | None:
-    """Parse Enhanced LRC (word-level <mm:ss.xx> tags) into our lines format.
-
-    Word tags carry START times only, so a word's end is the next tag's time
-    (next line's first tag for line-final words). Plain LRC lines without word
-    tags get their text evenly interpolated across the line's time span.
-    Returns None when nothing timed could be extracted.
-    """
-    if not raw or not raw.strip():
-        return None
-    content = "\n".join(ln for ln in raw.splitlines()
-                        if not ln.strip().startswith("```"))
-    offset_ms = 0.0
-    entries: list[tuple[float, list[tuple[float, str]]]] = []
-    for ln in content.splitlines():
-        s = ln.strip()
-        om = _OFFSET_TAG.match(s)
-        if om:
-            offset_ms = float(om.group(1))
-            continue
-        m = _LINE_TS.match(s)
-        if not m:
-            continue  # metadata tag ([ti:], [ar:], …) or noise
-        t0 = _tag_seconds(*m.groups())
-        rest = s[m.end():]
-        tags = list(_WORD_TS.finditer(rest))
-        # (start, token, explicit_end|None) per word
-        wlist: list[tuple[float, str, float | None]] = []
-        if tags:
-            lead = rest[:tags[0].start()].strip()
-            if lead:
-                wlist.extend((t0, tok, None) for tok in lead.split())
-            for i, wm in enumerate(tags):
-                wt = _tag_seconds(*wm.groups())
-                nxt = tags[i + 1].start() if i + 1 < len(tags) else len(rest)
-                chunk = rest[wm.end():nxt].strip()
-                if chunk:
-                    wlist.extend((wt, tok, None) for tok in chunk.split())
-                elif wlist:
-                    # trailing/empty tag: explicit end for the last open word
-                    # (Gemini ends lines with <mm:ss.xx> after the final word)
-                    for j in range(len(wlist) - 1, -1, -1):
-                        if wlist[j][2] is None:
-                            wlist[j] = (wlist[j][0], wlist[j][1], wt)
-                            break
-        else:
-            wlist.extend((t0, tok, None) for tok in rest.split())
-        if wlist:
-            entries.append((t0, wlist))
-    if not entries:
-        return None
-    entries.sort(key=lambda x: x[0])
-    adj = offset_ms / 1000.0
-    lines: list[dict] = []
-    for i, (_t0, wlist) in enumerate(entries):
-        ws = []
-        for j, (wt, tok, xend) in enumerate(wlist):
-            start = wt - adj
-            if xend is not None:
-                end = xend - adj
-            elif j + 1 < len(wlist):
-                end = wlist[j + 1][0] - adj
-            elif i + 1 < len(entries):
-                end = entries[i + 1][1][0][0] - adj
-            else:
-                end = start + 1.0
-            end = max(end, start)
-            ws.append({"t": tok, "s": round(start, 3), "e": round(end, 3)})
-        lines.append({"text": " ".join(w["t"] for w in ws), "words": ws})
-    return lines
 
 
 def _parse_audio_llm_json(raw: str) -> list[dict]:
@@ -489,8 +404,6 @@ def build(model_id: str):
 def pick(model_id: str | None = None):
     """Choose a cloud backend from an explicit id or settings; explain choice."""
     from app.cloud_models import CATALOG, resolved_transcribe_model
-    from app.settings import settings
-    _ = settings
     mid = model_id or resolved_transcribe_model()
     if mid:
         m = get_model(mid)
@@ -503,7 +416,6 @@ def pick(model_id: str | None = None):
             return None, f"{m.name} needs {env} set"
         return backend, m.name
     # auto: first available in preference order
-    from app.cloud_models import CATALOG
     for m in CATALOG:
         backend = build(m.id)
         if backend is not None and backend.available():
