@@ -4,11 +4,20 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import app.config as cfg
 from app.settings import Settings
 
 
-def fresh_settings():
-    return Settings()
+def fresh_settings(monkeypatch=None):
+    # isolate from any real settings.json on disk
+    d = Path(".test-settings-data")
+    d.mkdir(parents=True, exist_ok=True)
+    old = cfg.DATA_DIR
+    cfg.DATA_DIR = d
+    try:
+        return Settings()
+    finally:
+        cfg.DATA_DIR = old
 
 
 def test_defaults_are_greedy_pair():

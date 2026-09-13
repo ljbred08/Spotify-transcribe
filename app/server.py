@@ -43,6 +43,15 @@ def get_job(job_id: str):
     }
 
 
+@app.post("/api/jobs/{job_id}/cancel")
+def cancel_job(job_id: str):
+    job = store.get_job(job_id)
+    if not job:
+        raise HTTPException(404, "job not found")
+    store.request_cancel(job_id)
+    return {"id": job.id, "status": job.status.value, "message": job.message}
+
+
 @app.get("/api/tracks")
 def list_tracks():
     return [
@@ -163,7 +172,7 @@ def update_settings(body: dict):
     keys = ("backend", "model", "cloud_model", "llm_format", "llm_url",
             "llm_model", "llm_model_ollama", "llm_provider",
             "transcribe_provider", "transcribe_model", "keys",
-            "temperature", "top_p")
+            "temperature", "top_p", "transcribe_timeout")
     try:
         out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:

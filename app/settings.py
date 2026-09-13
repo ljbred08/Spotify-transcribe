@@ -21,6 +21,7 @@ _DEFAULTS = {
     # --- advanced sampling params (mutually exclusive: one at 1.0) ----------
     "temperature": 0.0,                # greedy by default (top_p = 1)
     "top_p": 1.0,
+    "transcribe_timeout": 60,          # seconds; watchdog for slow models
     # --- block 2 (formatter; only used with transcribe-only models) ----------
     "llm_provider": "ollama",
     "llm_model": "",                   # api model for the formatter provider
@@ -130,6 +131,14 @@ class Settings:
                 self._data["top_p"] = top_p
                 if top_p != 1.0 and self._data["temperature"] != 1.0:
                     self._data["temperature"] = 1.0
+            if "transcribe_timeout" in fields:
+                try:
+                    tmo = float(fields["transcribe_timeout"])
+                except (TypeError, ValueError):
+                    raise ValueError("transcribe_timeout must be a number")
+                if tmo < 10:
+                    raise ValueError("transcribe_timeout must be at least 10 seconds")
+                self._data["transcribe_timeout"] = tmo
             if "llm_provider" in fields:
                 val = str(fields["llm_provider"])
                 if val not in _VALID_FORMATTER_PROVIDERS:

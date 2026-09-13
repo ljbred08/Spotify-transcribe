@@ -23,6 +23,9 @@ class JobStatus(str, Enum):
     ERROR = "error"
 
 
+TERMINAL_STATUSES = {JobStatus.DONE, JobStatus.ERROR}
+
+
 @dataclass
 class Word:
     text: str
@@ -63,6 +66,9 @@ class Job:
     # per-job overrides for retranscribe jobs (None = use app settings)
     retranscribe_backend: str | None = None
     retranscribe_model: str | None = None
+    # set when the user (or the timeout watchdog) asks to cancel; the
+    # pipeline checks it at every stage boundary and raises Canceled
+    cancel_requested: bool = False
 
 
 class Store:
@@ -113,6 +119,7 @@ class Store:
                 kind=j.get("kind", "download"),
                 retranscribe_backend=j.get("retranscribe_backend"),
                 retranscribe_model=j.get("retranscribe_model"),
+                cancel_requested=j.get("cancel_requested", False),
             )
             self._jobs[job.id] = job
 
@@ -155,8 +162,32 @@ class Store:
             job = self._jobs.get(job_id)
             if not job:
                 return None
+            # terminal jobs are frozen: progress writes from a still-running
+            # thread must not resurrect a canceled/errored job
+            if job.status in TERMINAL_STATUSES and "status" in fields:
+                if fields["status"] is not JobStatus.ERROR:
+                    fields.pop("status")
+                    fields.pop("message", None)
+                elif "message" not in fields:
+                    fields.pop("status")
             for key, value in fields.items():
                 setattr(job, key, value)
+            job.updated_at = time.time()
+            self._save()
+            return job
+
+    def request_cancel(self, job_id: str) -> Job | None:
+        """Ask a running/queued job to stop; returns the refreshed job."""
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if not job or job.status in TERMINAL_STATUSES:
+                return job
+            job.cancel_requested = True
+            if job.status is JobStatus.QUEUED:
+                job.status = JobStatus.ERROR
+                job.message = "Canceled before start"
+            else:
+                job.message = "Canceling…"
             job.updated_at = time.time()
             self._save()
             return job

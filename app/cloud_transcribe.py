@@ -271,6 +271,10 @@ class OpenRouterAudio:
             if self.m.api_model.startswith("openai/"):
                 # gpt-audio models emit speech by default; force text output
                 body["modalities"] = ["text"]
+            # soft latency bound: OpenRouter promotes providers whose rolling
+            # p90 TTFT fits; if none qualify the best host still serves the
+            # request (zero extra 4xx risk on models with a single provider)
+            body["provider"] = {"preferred_max_latency": {"p90": 30.0}}
             progress(f"{self.m.name} is listening and formatting the lyrics…")
             try:
                 resp = _post_with_retries(

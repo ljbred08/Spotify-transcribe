@@ -99,6 +99,15 @@
   @keyframes spin { to { transform: rotate(360deg); } }
   #job-card.error .spinner { display: none; }
   #job-card.error .status-row::before { content: "✕"; color: var(--danger); font-weight: 800; }
+  #job-card.done .spinner { display: none; }
+  #job-card.done .status-row::before { content: "✔"; color: var(--accent); font-weight: 800; }
+  .job-stop {
+    margin-left: auto; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--muted); border-radius: 999px; padding: 3px 10px;
+    font-size: 11px; cursor: pointer;
+  }
+  .job-stop:hover { border-color: var(--danger); color: var(--danger); }
+  #job-card.done .job-stop, #job-card.error .job-stop { display: none; }
   #job-msg { color: var(--muted); margin-top: 6px; font-size: 12px; line-height: 1.4; }
 
   #library { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
@@ -329,6 +338,17 @@
     white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
   }
   .ver-pill:hover { border-color: #2f3950; color: var(--text); }
+  /* many versions: the active pill becomes a <select> with the same look */
+  select.ver-select {
+    appearance: none; -webkit-appearance: none;
+    border: 1px solid rgba(30,215,96,.4); background: rgba(30,215,96,.07);
+    color: var(--accent); border-radius: 999px; padding: 3px 22px 3px 10px;
+    font-size: 11px; cursor: pointer; max-width: 240px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6'><path d='M0 0l4 6 4-6z' fill='%231ed760'/></svg>");
+    background-repeat: no-repeat; background-position: right 8px center;
+  }
+  select.ver-select:hover { filter: brightness(1.2); }
+  select.ver-select option { color: var(--text); background: var(--panel-2); }
   .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
 
   .export-btn {
@@ -480,7 +500,10 @@
   </form>
 
   <div id="job-card">
-    <div class="status-row"><div class="spinner"></div><span id="job-status">Working…</span></div>
+    <div class="status-row">
+      <div class="spinner"></div><span id="job-status">Working…</span>
+      <button class="job-stop" id="job-stop" type="button" title="Cancel this job">■ Stop</button>
+    </div>
     <div id="job-msg"></div>
   </div>
 
@@ -519,7 +542,12 @@
           <input type="range" id="t-topp" min="0.05" max="1" step="0.05" />
           <span id="t-topp-val" class="key-state"></span>
         </div>
-        <div class="backend-row"><span class="model-sub">Locked: moving one slider snaps the other back to 1, so the pair is always valid.</span></div>
+        <div class="backend-row">
+          <label for="t-timeout" title="Whole-job watchdog for cloud transcription: if the model hasn't returned by then, the job fails with a clear message instead of hanging forever.">Timeout (s)</label>
+          <input type="number" id="t-timeout" min="10" max="1800" step="10" />
+          <button class="model-btn" id="t-timeout-preset" type="button" title="Free/open models can queue for minutes — give the watchdog a big budget">Long song: 300</button>
+        </div>
+        <div class="backend-row"><span class="model-sub">Sliders are locked: moving one snaps the other back to 1.</span></div>
       </details>
     </div>
     <div class="cfg-block" id="fmt-block">
@@ -721,19 +749,25 @@ $("#new-job").addEventListener("submit", async (e) => {
   }
 });
 
+let activeJobId = null;
+
 function showJobCard({ status, message }) {
   const card = $("#job-card");
   card.style.display = "block";
   card.classList.toggle("error", status === "error");
+  card.classList.toggle("done", status === "done");
   const labels = {
     queued: "Queued", downloading: "Downloading audio", transcribing: "Transcribing",
     aligning: "Aligning lines", done: "Done", error: "Failed",
   };
   $("#job-status").textContent = labels[status] || status;
   $("#job-msg").textContent = message || "";
+  $("#job-stop").style.display =
+    ["queued", "downloading", "transcribing", "aligning"].includes(status) ? "" : "none";
 }
 
 function pollJob(jobId) {
+  activeJobId = jobId;
   clearInterval(pollTimer);
   pollTimer = setInterval(async () => {
     const res = await fetch(`/api/jobs/${jobId}`);
@@ -748,6 +782,12 @@ function pollJob(jobId) {
     }
   }, 1000);
 }
+
+$("#job-stop").addEventListener("click", async () => {
+  if (!activeJobId) return;
+  try { await fetch(`/api/jobs/${activeJobId}/cancel`, { method: "POST" }); } catch {}
+  // poller picks up the "Canceling…"/error state within a second
+});
 
 /* ---------------- track selection ---------------- */
 async function loadRetransModels() {
@@ -781,28 +821,55 @@ async function loadVersions(trackId) {
     const res = await fetch(`/api/tracks/${trackId}/versions`);
     if (!res.ok) return;
     const idx = await res.json();
-    for (const v of idx.versions || []) {
-      const b = document.createElement("button");
-      b.className = "ver-pill" + (v.version === idx.active ? " active" : "");
-      b.textContent = `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`;
-      b.title = v.note || (v.backend ? `via ${v.backend}` : "")
-              + (v.lines ? ` — ${v.lines} lines` : "");
-      b.addEventListener("click", async () => {
-        if (v.version === idx.active) return;
-        await fetch(`/api/tracks/${trackId}/versions/${v.version}/activate`, { method: "POST" });
+    const versions = idx.versions || [];
+    const pillLabel = (v) =>
+      `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`;
+    const pillTitle = (v) =>
+      (v.note || (v.backend ? `via ${v.backend}` : ""))
+      + (v.lines ? ` — ${v.lines} lines` : "");
+
+    if (versions.length <= 3) {
+      // few versions: plain pills, same as always
+      for (const v of versions) {
+        const b = document.createElement("button");
+        b.className = "ver-pill" + (v.version === idx.active ? " active" : "");
+        b.textContent = pillLabel(v);
+        b.title = pillTitle(v);
+        b.addEventListener("click", async () => {
+          if (v.version === idx.active) return;
+          await fetch(`/api/tracks/${trackId}/versions/${v.version}/activate`, { method: "POST" });
+          selectTrack(trackId);
+        });
+        wrap.appendChild(b);
+      }
+    } else {
+      // many versions: ONE green pill-shaped dropdown (same styling)
+      const sel = document.createElement("select");
+      sel.className = "ver-select";
+      sel.title = "Choose transcript version";
+      for (const v of versions) {
+        const o = document.createElement("option");
+        o.value = String(v.version);
+        o.textContent = pillLabel(v);
+        o.title = pillTitle(v);
+        if (v.version === idx.active) o.selected = true;
+        sel.appendChild(o);
+      }
+      sel.addEventListener("change", async () => {
+        await fetch(`/api/tracks/${trackId}/versions/${sel.value}/activate`, { method: "POST" });
         selectTrack(trackId);
       });
-      wrap.appendChild(b);
-      if (v.version === idx.active) {
-        const badge = document.getElementById("badge-backend");
-        if (badge) badge.textContent = v.backend ? `via ${v.backend.split(":").pop()}` : "transcribed";
-      }
-      if (v.version === idx.active) {
-        $("#badge-lines").textContent = `${v.lines ?? currentData.lines.length} lines`;
-      }
-      const reBtn = $("#re-btn");
-      if (reBtn) reBtn.dataset.versions = String(idx.versions.length);
+      wrap.appendChild(sel);
     }
+
+    const activeV = versions.find((v) => v.version === idx.active);
+    const badge = document.getElementById("badge-backend");
+    if (activeV && badge)
+      badge.textContent = activeV.backend ? `via ${activeV.backend.split(":").pop()}` : "transcribed";
+    if (activeV)
+      $("#badge-lines").textContent = `${activeV.lines ?? currentData.lines.length} lines`;
+    const reBtn = $("#re-btn");
+    if (reBtn) reBtn.dataset.versions = String(versions.length);
   } catch { /* non-fatal */ }
 }
 
@@ -1218,6 +1285,8 @@ function renderConfig(data) {
   const active = tModels.find((m) => m.id === activeId);
   $("#t-active").textContent = active ? active.notes : "";
   samplingLabels(s.temperature ?? 0, s.top_p ?? 1);
+  const tmo = $("#t-timeout");
+  if (document.activeElement !== tmo) tmo.value = s.transcribe_timeout ?? 60;
   // --- block 2: formatter (only for transcribe-only models) ---
   const isAudio = active && active.kind === "audio_llm";
   $("#fmt-block").style.display = isAudio ? "none" : "";
@@ -1302,6 +1371,17 @@ $("#t-topp").addEventListener("input", async () => {
   samplingLabels(temp, topp);
   const s = await putSettings({ temperature: temp, top_p: topp });
   if (s && typeof s.temperature === "number") samplingLabels(s.temperature, s.top_p);
+});
+
+$("#t-timeout").addEventListener("change", async () => {
+  const v = Math.max(10, +$("#t-timeout").value || 60);
+  $("#t-timeout").value = v;
+  await putSettings({ transcribe_timeout: v });
+});
+
+$("#t-timeout-preset").addEventListener("click", async () => {
+  $("#t-timeout").value = 300;
+  await putSettings({ transcribe_timeout: 300 });
 });
 
 /* --- block 2 events --- */
