@@ -259,6 +259,15 @@
   }
   .ctrl-btn:hover { background: var(--panel-2); border-color: #2f3950; }
   .ctrl-btn:active { transform: scale(.95); }
+  .text-btn {
+    background: var(--panel); color: var(--text);
+    border: 1px solid var(--line); border-radius: 12px;
+    height: 44px; padding: 0 14px; font-size: 14px; cursor: pointer;
+    white-space: nowrap; transition: background .15s, border-color .15s, transform .06s;
+  }
+  .text-btn:hover { background: var(--panel-2); border-color: #2f3950; }
+  .text-btn:active { transform: scale(.97); }
+  .text-btn:disabled { opacity: .5; cursor: default; }
   #play-btn {
     width: 52px; height: 52px; font-size: 19px;
     background: linear-gradient(135deg, var(--accent), var(--accent-2));
@@ -270,6 +279,12 @@
     border-radius: 8px; padding: 6px 9px; font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .speed-btn.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
+  #inst-thresh {
+    background: none; border: 1px solid var(--line); color: var(--muted);
+    border-radius: 8px; padding: 6px 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; margin-left: 10px;
+  }
+  #inst-thresh:hover { color: var(--text); border-color: #2f3950; }
 
   #export-row { padding: 10px 44px 0; display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -334,6 +349,17 @@
     transform: scale(1.02);
   }
   .lyric-line .word { transition: color .1s; }
+  .inst-divider {
+    display: flex; align-items: center; gap: 14px;
+    padding: 16px 0; color: #4a5468; font-size: 13px; font-weight: 600;
+    letter-spacing: .04em; opacity: .3; transition: opacity .4s;
+    cursor: pointer; user-select: none;
+  }
+  .inst-divider .inst-line { flex: 1; height: 1px; background: var(--line); }
+  .inst-divider.active { opacity: .85; }
+  .inst-divider.active .inst-line {
+    background: linear-gradient(90deg, var(--line), var(--accent-2), var(--line));
+  }
   .lyric-line.active .word.done { color: var(--accent-2); }
   .lyric-line.active .word.singing {
     background: linear-gradient(90deg, var(--accent), var(--accent-2));
@@ -416,7 +442,7 @@
     #lyrics { padding: 18px 16px 80px; }
     .export-btn { padding: 9px 14px; font-size: 12px; }
     /* >=16px on form controls so iOS Safari doesn't zoom-on-focus */
-    #url-input, #re-model, .backend-row select, .backend-row input[type="text"] { font-size: 16px; }
+    #url-input, #re-model, #inst-thresh, .backend-row select, .backend-row input[type="text"] { font-size: 16px; }
   }
 </style>
 </head>
@@ -515,7 +541,7 @@
 
     <div id="retrans-row">
       <select id="re-model" title="Model for the next re-transcription"></select>
-      <button class="ctrl-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept">↻ Re-transcribe</button>
+      <button class="text-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept">↻ Re-transcribe</button>
       <span id="version-pills"></span>
     </div>
 
@@ -529,6 +555,13 @@
       <button class="ctrl-btn" id="play-btn" title="Play / pause">▶</button>
       <button class="ctrl-btn" id="fwd-btn" title="Forward 5s">⏩</button>
       <div class="speed-group" id="speed-group"></div>
+      <select id="inst-thresh" class="speed-btn" title="Detect instrumental breaks longer than this; clicking a divider jumps past it">
+        <option value="0">no breaks</option>
+        <option value="5">breaks 5s+</option>
+        <option value="10" selected>breaks 10s+</option>
+        <option value="15">breaks 15s+</option>
+        <option value="20">breaks 20s+</option>
+      </select>
     </div>
 
     <div id="export-row">
@@ -555,6 +588,7 @@ let peaks = null;       // waveform bar heights
 let lastManualScroll = 0;
 let pollTimer = null;
 let downXY = null;      // mousedown position for click-vs-drag detection
+let instThreshold = 10; // min gap (s) that counts as an instrumental break
 
 async function retranscribe() {
   if (!currentTrack) return;
@@ -765,10 +799,57 @@ async function selectTrack(trackId) {
 }
 
 /* ---------------- lyrics ---------------- */
+let lineNodes = [];     // lyric-line elements, index-aligned with currentData.lines
+let dividerNodes = [];  // {el, lineIdx, end, nextStart} instrumental breaks
+
+function _makeDivider(secs, kind, seekTo, autoSkip) {
+  const d = document.createElement("div");
+  d.className = "inst-divider";
+  const label = kind === "intro" ? `${secs}s intro`
+    : kind === "outro" ? `${secs}s outro` : `${secs}s instrumental`;
+  d.innerHTML = `<span class="inst-line"></span>` +
+    `<span class="inst-label">·· ${label} ··</span>` +
+    `<span class="inst-line"></span>`;
+  d.title = "Instrumental section — click to jump " +
+    (autoSkip ? "past it" : "to the end");
+  d.addEventListener("mousedown", (e) => { downXY = [e.clientX, e.clientY]; });
+  d.addEventListener("click", (e) => {
+    const sel = window.getSelection && window.getSelection();
+    if (sel && sel.type === "Range") return;
+    if (downXY) {
+      const dx = e.clientX - downXY[0], dy = e.clientY - downXY[1];
+      if (dx * dx + dy * dy > 100) return;
+    }
+    audio.currentTime = Math.max(0, seekTo);
+    if (audio.paused) audio.play().catch(() => {});
+  });
+  return d;
+}
+
 function buildLyrics() {
   const wrap = $("#lyrics");
   wrap.innerHTML = "";
+  lineNodes = [];
+  dividerNodes = [];
+  // lead-in: a long intro before the first line gets a skip divider
+  if (instThreshold > 0 && currentData.lines.length
+      && currentData.lines[0].start >= instThreshold) {
+    const d = _makeDivider(Math.round(currentData.lines[0].start), "intro",
+                           currentData.lines[0].start + 0.01, true);
+    wrap.appendChild(d);
+    dividerNodes.push({ el: d, end: 0, nextStart: currentData.lines[0].start,
+                        skip: true });
+  }
+  let prevEnd = null;
   currentData.lines.forEach((line, idx) => {
+    // Spotify-style divider inside long instrumental gaps (click = skip it)
+    if (prevEnd !== null && instThreshold > 0 && line.start - prevEnd >= instThreshold) {
+      const d = _makeDivider(Math.round(line.start - prevEnd), "break",
+                             line.start + 0.01, true);
+      wrap.appendChild(d);
+      dividerNodes.push({ el: d, end: prevEnd, nextStart: line.start,
+                          skip: true });
+    }
     const div = document.createElement("div");
     div.className = "lyric-line";
     div.dataset.idx = idx;
@@ -793,7 +874,18 @@ function buildLyrics() {
       if (audio.paused) audio.play().catch(() => {});
     });
     wrap.appendChild(div);
+    lineNodes.push(div);
+    const end = line.words.length ? line.words[line.words.length - 1].end : line.start;
+    prevEnd = prevEnd === null ? end : Math.max(prevEnd, end);
   });
+  // outro: a long instrumental tail after the last line (no auto-skip —
+  // jumping to the end would stop playback)
+  const dur = currentData.duration || 0;
+  if (instThreshold > 0 && dur && prevEnd !== null && dur - prevEnd >= instThreshold) {
+    const d = _makeDivider(Math.round(dur - prevEnd), "outro", dur, false);
+    wrap.appendChild(d);
+    dividerNodes.push({ el: d, end: prevEnd, nextStart: dur, skip: false });
+  }
 }
 
 /* --- player tick: event-driven, no per-frame DOM writes ----------------
@@ -802,6 +894,7 @@ function buildLyrics() {
    mid-flight. Now the DOM is touched only when state CHANGES.             */
 let lastActive = -1;
 let lastScrollTarget = -1;
+const INST_SKIP_HOLD = 0.8;  // seconds into a break before auto-skipping
 
 function tickLyrics() {
   if (currentData && currentData.lines.length) {
@@ -817,19 +910,18 @@ function tickLyrics() {
     // (1) DOM work only on line transitions
     if (active !== lastActive) {
       const wrap = $("#lyrics");
-      const nodes = wrap.children;
-      if (lastActive >= 0 && nodes[lastActive]) {
-        nodes[lastActive].classList.remove("active");
-        nodes[lastActive].querySelectorAll(".word.done, .word.singing")
+      if (lastActive >= 0 && lineNodes[lastActive]) {
+        lineNodes[lastActive].classList.remove("active");
+        lineNodes[lastActive].querySelectorAll(".word.done, .word.singing")
           .forEach((el) => el.classList.remove("done", "singing"));
       }
-      for (let i = 0; i < nodes.length; i++) {
-        nodes[i].classList.toggle("past", active !== -1 && i < active);
-        if (i === active) nodes[i].classList.add("active");
+      for (let i = 0; i < lineNodes.length; i++) {
+        lineNodes[i].classList.toggle("past", active !== -1 && i < active);
+        if (i === active) lineNodes[i].classList.add("active");
       }
       // (2) scroll once per line change, to a correctly-measured target
       if (active !== -1 && Date.now() - lastManualScroll > 4000 && !audio.paused) {
-        const node = nodes[active];
+        const node = lineNodes[active];
         const target = node.offsetTop - wrap.offsetTop
           - (wrap.clientHeight - node.offsetHeight) / 2;
         if (Math.abs(target - lastScrollTarget) > 2) {
@@ -842,13 +934,23 @@ function tickLyrics() {
 
     // (3) word sweep on the active line only (cheap: ~8 spans)
     if (active !== -1) {
-      const node = $("#lyrics").children[active];
+      const node = lineNodes[active];
       if (node) {
         for (const span of node.querySelectorAll(".word")) {
           const ws = +span.dataset.start, we = +span.dataset.end;
           span.classList.toggle("done", t >= we);
           span.classList.toggle("singing", t >= ws && t < we);
         }
+      }
+    }
+
+    // (4) instrumental dividers: glow inside the break, auto-skip long ones
+    for (const d of dividerNodes) {
+      const inBreak = t >= d.end && t < d.nextStart;
+      d.el.classList.toggle("active", inBreak);
+      if (inBreak && d.skip && instThreshold > 0 && !audio.paused
+          && !audio.seeking && t - d.end > INST_SKIP_HOLD) {
+        audio.currentTime = d.nextStart + 0.01;
       }
     }
 
@@ -861,6 +963,11 @@ requestAnimationFrame(tickLyrics);
 
 $("#lyrics").addEventListener("wheel", () => { lastManualScroll = Date.now(); }, { passive: true });
 $("#lyrics").addEventListener("touchmove", () => { lastManualScroll = Date.now(); }, { passive: true });
+
+$("#inst-thresh").addEventListener("change", (e) => {
+  instThreshold = +e.target.value;
+  if (currentData) buildLyrics();   // rebuild with/without dividers
+});
 
 /* waveform repaints on a timer, not the animation frame */
 setInterval(() => { if (peaks && currentData) drawWaveProgress(); }, 250);
