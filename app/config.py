@@ -39,11 +39,13 @@ YTDLP_EXTRA = [f for f in _get("YTDLP_EXTRA").split(",") if f.strip()]
 GROQ_API_KEY = _get("GROQ_API_KEY")
 OPENAI_API_KEY = _get("OpenAI_API_KEY".lower()) or _get("OPENAI_API_KEY")
 GEMINI_API_KEY = _get("GEMINI_API_KEY") or _get("GOOGLE_API_KEY")
+OPENROUTER_API_KEY = _get("OPENROUTER_API_KEY")
 
 # --- Jobs ------------------------------------------------------------------
 JOB_CONCURRENCY = max(1, int(_get("JOB_CONCURRENCY", "1")))
 
 __all__ = [
     "DATA_DIR", "YTDLP_COOKIES_FILE", "YTDLP_EXTRA",
-    "GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "JOB_CONCURRENCY",
+    "GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY",
+    "OPENROUTER_API_KEY", "JOB_CONCURRENCY",
 ]

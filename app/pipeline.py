@@ -60,7 +60,7 @@ class Pipeline:
             self.store.update_job(job.id, track_id=track.id)
 
             result, lines, llm_note = self._transcribe_and_format(
-                job, dl.audio_path)
+                job, dl.audio_path, title=track.title, artist=track.artist)
 
             version = self.store.save_transcript(track.id, lines,
                                                  backend=result.backend)
@@ -71,7 +71,8 @@ class Pipeline:
             traceback.print_exc()
             self.store.update_job(job.id, status=JobStatus.ERROR, message=str(exc)[:300])
 
-    def _transcribe_and_format(self, job: Job, audio_path: Path):
+    def _transcribe_and_format(self, job: Job, audio_path: Path, *,
+                               title: str = "", artist: str = ""):
         """Shared transcription+formatting; returns (result, lines, llm_note)."""
         from app import transcribe as tr
         from app.cloud_models import get_model
@@ -84,11 +85,15 @@ class Pipeline:
             raise tr.TranscribeError(note)
 
         self._progress(job, JobStatus.TRANSCRIBING, note)
-        result = backend.transcribe(audio_path, lambda m: self._say(job, m))
+        result = backend.transcribe(audio_path, lambda m: self._say(job, m),
+                                    title=title, artist=artist)
 
         self._progress(job, JobStatus.ALIGNING, "Building synced lines…")
         llm_note = ""
-        used_model = model_id or settings.get().get("cloud_model") or ""
+        used_model = model_id
+        if not used_model:
+            from app.cloud_models import resolved_transcribe_model
+            used_model = resolved_transcribe_model()
         spec = get_model(used_model)
         audio_llm = bool(spec and spec.kind == "audio_llm")
         if audio_llm or not settings.get()["llm_format"]:
@@ -115,7 +120,8 @@ class Pipeline:
         track = self.store.get_track(job.track_id or "")
         if not track or not track.audio_file or not track.audio_file.exists():
             raise transcribe.TranscribeError("Track audio is missing — cannot retranscribe")
-        result, lines, llm_note = self._transcribe_and_format(job, track.audio_file)
+        result, lines, llm_note = self._transcribe_and_format(
+            job, track.audio_file, title=track.title, artist=track.artist)
         note = f"retranscribed via {result.backend}"
         version = self.store.save_transcript(track.id, lines,
                                              backend=result.backend, note=note)

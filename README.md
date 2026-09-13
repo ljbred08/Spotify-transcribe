@@ -27,8 +27,9 @@ uvicorn app.server:app --reload
 
 Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
-> Set at least one of `GEMINI_API_KEY`, `GROQ_API_KEY` or `OPENAI_API_KEY`.
-> Gemini models listen and return formatted, word-synced lyrics in one step.
+> Set at least one of `GEMINI_API_KEY`, `OPENROUTER_API_KEY`, `GROQ_API_KEY`
+> or `OPENAI_API_KEY` (or paste keys in the app — they're saved to settings).
+> Audio LLMs listen and return formatted, word-synced lyrics in one step.
 
 ## How it works
 
@@ -37,12 +38,15 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
    **ytmusicapi** (duration-aware fallback included); YouTube and other URLs go
    straight to yt-dlp. Audio is pulled as m4a via ffmpeg.
 2. **Transcribe** — two cloud paths, chosen per model in the Models panel:
-   - **Audio LLMs** (Gemini 2.5, GPT-4o-audio): one call listens to the song and
-     returns lyric-booklet lines with per-word timings — the model does the
-     transcription, line breaking, capitalization and lyric conventions itself.
+   - **Audio LLMs** (Gemini via Google/OpenRouter, GPT Audio, Voxtral, Muse Spark,
+     Inkling, Nemotron Omni, MiMo — see the in-app list): one call sends the song
+     (plus title/artist) and asks for **Enhanced LRC** with word-level timestamps —
+     the model does transcription, line breaking, capitalization and lyric
+     conventions itself, in the format it already knows. If the reply isn't
+     parseable LRC, it retries once with a strict JSON lyric-sheet prompt.
    - **Transcribers** (Whisper large v3 / turbo via Groq, Whisper or GPT-4o-transcribe
-     via OpenAI): return words with timestamps; a separate LLM — cloud (Groq/OpenAI)
-     or local ollama — formats them into lines, verified token-exact.
+     via OpenAI): return words with timestamps; a separate LLM — Gemini, OpenRouter,
+     Groq, OpenAI or local ollama — formats them into lines, verified token-exact.
 3. **Align** — words are grouped into lines at silence gaps / length limits, so
    every line is karaoke-ready with per-word sweep.
 4. **Read along** — the player highlights the active line, sweeps each word green,
@@ -52,7 +56,8 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
 | Var | Default | Notes |
 | --- | --- | --- |
-| `GEMINI_API_KEY` | — | enables Gemini audio models (one-step transcription + formatting) |
+| `GEMINI_API_KEY` | — | enables Gemini audio models + Gemini formatter (one-step transcription + formatting) |
+| `OPENROUTER_API_KEY` | — | enables the OpenRouter omni list (Gemini aliases, GPT Audio, Voxtral, …) + formatter |
 | `GROQ_API_KEY` | — | enables Whisper large v3/turbo transcription + Groq formatters |
 | `OPENAI_API_KEY` | — | enables Whisper / GPT-4o transcription + OpenAI audio/formatter models |
 | `APP_DATA_DIR` | `data` | where audio, transcripts, settings live |
@@ -68,13 +73,19 @@ the next job (no restart).
 
 | Model | Kind | Good at |
 | --- | --- | --- |
-| `gemini:gemini-2.5-flash` | audio LLM | one-step: listens, returns formatted synced lyrics |
-| `gemini:gemini-2.5-pro` | audio LLM | highest quality audio understanding; slower |
-| `openai:gpt-4o-audio-preview` | audio LLM | one-step via OpenAI |
-| `groq:whisper-large-v3` | transcriber | fast word-level timestamps; best value |
-| `groq:whisper-large-v3-turbo` | transcriber | cheaper/faster, slightly lower accuracy |
-| `openai:whisper-1` | transcriber | word-level timestamps |
-| `openai:gpt-4o-transcribe` | transcriber | strongest transcription; segment timestamps (words interpolated) |
+| `gemini:gemini-flash-latest` | audio LLM | one-step: newest Gemini Flash; listens, returns formatted synced lyrics |
+| `gemini:gemini-pro-latest` | audio LLM | one-step: newest Gemini Pro; highest quality, slower |
+| `gemini:gemini-flash-lite-latest` | audio LLM | one-step: lightweight/fast Gemini Flash Lite |
+| `openrouter:~google/gemini-flash-latest` | audio LLM | newest Gemini Flash via OpenRouter |
+| `openrouter:~google/gemini-pro-latest` | audio LLM | newest Gemini Pro via OpenRouter |
+| `openrouter:google/gemini-3.5-flash-lite` | audio LLM | lightweight Gemini 3.5 Flash via OpenRouter (no `latest` alias there) |
+| `openrouter:openai/gpt-audio` · `…-mini` | audio LLM | OpenAI native audio engines |
+| `openrouter:mistralai/voxtral-small-24b-2507` | audio LLM | Mistral audio model; strong speech transcription |
+| `openrouter:meta/muse-spark-1.3` (+ contributor) | audio LLM | Meta multimodal audio (contributor = discounted, trains on prompts) |
+| `openrouter:thinking-machines/inkling` (+ small) | audio LLM | open-weight MoE models with native audio understanding |
+| `openrouter:nvidia/nemotron-3-nano-omni` · `xiaomi/mimo-v2-omni` | audio LLM | lightweight omni models |
+| `groq:whisper-large-v3` / `…-turbo` | transcriber | fast word-level timestamps (needs formatter block) |
+| `openai:whisper-1` / `gpt-4o-transcribe` / `…-mini-transcribe` | transcriber | word/segment timestamps (needs formatter block) |
 
 When a **transcriber** is selected, the panel also shows the **LLM lyric formatting**
 section (the formatter stage); select an **audio LLM** and it hides — the model already
@@ -94,7 +105,8 @@ next to the button switch the active version; every export uses the active versi
 
 Used on the **transcriber** path (audio LLMs return formatted lines themselves). The
 formatter provider is selectable: local [ollama](https://ollama.com) (default
-`qwen2.5:3b`, needs ~2 GB), Groq (`llama-3.3-70b-versatile`) or OpenAI (`gpt-4o-mini`).
+`qwen2.5:3b`, needs ~2 GB), Gemini, OpenRouter, Groq (`llama-3.3-70b-versatile`) or
+OpenAI (`gpt-4o-mini`).
 The LLM's only job is to re-emit the exact transcript with line breaks inserted so each
 line reads like a printed lyric booklet; the result is verified **token-exact** against
 the input (retrying with a plainer prompt when the model touches words), then lyric

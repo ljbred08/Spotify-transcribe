@@ -161,12 +161,14 @@ def get_settings():
 @app.put("/api/settings")
 def update_settings(body: dict):
     keys = ("backend", "model", "cloud_model", "llm_format", "llm_url",
-            "llm_model", "llm_provider", "cloud_formatter_model")
+            "llm_model", "llm_model_ollama", "llm_provider",
+            "transcribe_provider", "transcribe_model", "keys")
     try:
         out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    if "llm_url" in body or "llm_model" in body or "llm_provider" in body or body.get("check_llm"):
+    if any(k in body for k in ("llm_url", "llm_model", "llm_model_ollama",
+                               "llm_provider", "keys", "check_llm")):
         formatter.invalidate_status_cache()  # invalidate availability cache
     out["llmAvailable"] = formatter.llm_available()
     out["llm"] = formatter.llm_status()
@@ -175,11 +177,17 @@ def update_settings(body: dict):
 
 @app.get("/api/models")
 def list_models():
-    """Dynamic cloud catalog + current settings (incl. LLM section data)."""
+    """Dynamic cloud catalog + current settings (incl. formatter block data)."""
     data = settings.get()
     data["llmAvailable"] = formatter.llm_available()
     data["llm"] = formatter.llm_status_cached()
     return {"models": cloud_models.list_models(), "settings": data}
+
+
+@app.get("/api/providers")
+def list_providers():
+    """Provider dropdown data: key_env + whether a key is set (and from where)."""
+    return {"providers": cloud_models.list_providers()}
 
 
 @app.post("/api/llm/discover")

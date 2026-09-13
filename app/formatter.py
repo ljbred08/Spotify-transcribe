@@ -27,12 +27,8 @@ import httpx
 
 from app.models import Line, Word
 
-# NOTE: LFM2.5-350M was evaluated and cannot do ANY of these tasks (recites,
-# truncates, or fills JSON schemas with random words, even with grammar
-# constraints). qwen2.5:3b is the smallest model tested that re-emits text
-# faithfully; any instruct chat model of ~1B+ should work.
-# URL + model live in persisted settings (seeded from OLLAMA_URL /
-# FORMATTER_MODEL env on first run) and are editable in the UI.
+# URL + model live in persisted settings (provider/model editable in the
+# models panel); API keys come from env or UI-saved settings.
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_FORMATTER_MODEL = "qwen2.5:3b"
 CHUNK_WORDS = 80       # words per LLM request (short outputs stay reliable)
@@ -67,21 +63,29 @@ def _clean_token(text: str) -> str:
 def _llm_config() -> "tuple[str, str, str]":
     """(provider, url_or_base, model) from persisted settings.
 
-    provider is ollama | groq | openai; url_or_base is the ollama URL for
-    ollama, the API base for cloud providers (key still comes from env).
+    provider is ollama | gemini | openrouter | groq | openai; url_or_base is
+    the ollama URL for ollama, else the provider's OpenAI-compatible base.
     """
     try:
         from app.settings import settings
         s = settings.get()
         provider = s.get("llm_provider") or "ollama"
-        model = s.get("llm_model") or DEFAULT_FORMATTER_MODEL
+        if provider == "ollama":
+            return provider, s.get("llm_url") or DEFAULT_OLLAMA_URL, \
+                s.get("llm_model_ollama") or DEFAULT_FORMATTER_MODEL
+        model = s.get("llm_model") or ""
+        if not model:
+            from app.cloud_models import formatter_default
+            model = formatter_default(provider)
+        if provider == "gemini":
+            return provider, "https://generativelanguage.googleapis.com/v1beta/openai", model
+        if provider == "openrouter":
+            return provider, "https://openrouter.ai/api/v1", model
         if provider == "groq":
-            return provider, "https://api.groq.com/openai/v1", \
-                s.get("cloud_formatter_model") or "llama-3.3-70b-versatile"
+            return provider, "https://api.groq.com/openai/v1", model
         if provider == "openai":
-            return provider, "https://api.openai.com/v1", \
-                s.get("cloud_formatter_model") or "gpt-4o-mini"
-        return "ollama", s.get("llm_url") or DEFAULT_OLLAMA_URL, model
+            return provider, "https://api.openai.com/v1", model
+        return "ollama", DEFAULT_OLLAMA_URL, DEFAULT_FORMATTER_MODEL
     except Exception:
         return "ollama", DEFAULT_OLLAMA_URL, DEFAULT_FORMATTER_MODEL
 
@@ -91,19 +95,11 @@ _STATUS_TTL = 5.0  # seconds; ollama polling happens on every settings fetch
 
 
 def llm_status() -> dict:
-    """Reachability + the active config, for the UI's LLM section."""
-    import os
+    """Reachability + the active config, for the UI's formatter block."""
     provider, url, model = _llm_config()
     models: list[str] = []
     online = False
-    if provider in ("groq", "openai"):
-        key_env = "GROQ_API_KEY" if provider == "groq" else "OPENAI_API_KEY"
-        online = bool(os.environ.get(key_env, "").strip())
-        # cloud catalogs are huge; surface the models we suggest
-        models = (["llama-3.3-70b-versatile", "llama-3.1-8b-instant"]
-                  if provider == "groq" else ["gpt-4o-mini", "gpt-4o"])
-        installed = True
-    else:
+    if provider == "ollama":
         try:
             with httpx.Client(timeout=2.5) as c:
                 tags = c.get(f"{url}/api/tags").json()
@@ -113,6 +109,11 @@ def llm_status() -> dict:
             online = False
         # exact or tag-prefix match ("qwen2.5:3b" also matches "qwen2.5:3b-instruct")
         installed = model in models or any(m.startswith(model) for m in models)
+    else:
+        from app.cloud_models import FORMATTER_MODELS, provider_key
+        online = bool(provider_key(provider))
+        installed = online
+        models = [name for _api, name in FORMATTER_MODELS.get(provider, [])]
     return {"provider": provider, "url": url, "model": model, "online": online,
             "installed": installed, "models": models}
 
@@ -184,7 +185,6 @@ def llm_available() -> bool:
 
 def _chat(prompt: str) -> str | None:
     """One chat completion via the configured provider (ollama or cloud)."""
-    import os
     provider, url, model = _llm_config()
     try:
         with httpx.Client(timeout=240.0) as c:
@@ -197,9 +197,9 @@ def _chat(prompt: str) -> str | None:
                     "options": {"temperature": 0.0, "num_ctx": 4096, "num_predict": 500},
                 })
                 return r.json()["message"]["content"]
-            # OpenAI-compatible (groq / openai)
-            key_env = "GROQ_API_KEY" if provider == "groq" else "OPENAI_API_KEY"
-            key = os.environ.get(key_env, "").strip()
+            # OpenAI-compatible cloud providers
+            from app.cloud_models import provider_key
+            key = provider_key(provider)
             if not key:
                 return None
             r = c.post(f"{url}/chat/completions", headers={
