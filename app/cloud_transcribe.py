@@ -258,13 +258,17 @@ class OpenRouterAudio:
             body = {
                 "model": self.m.api_model,
                 "temperature": 0.0,
-                "modalities": ["text"],
+                "top_p": 1,          # voxtral: greedy (temp 0) requires top_p == 1
+                "max_tokens": 65536,
                 "messages": [{"role": "user", "content": [
                     {"type": "text", "text": prompt},
                     {"type": "input_audio",
                      "input_audio": {"data": b64, "format": "wav"}},
                 ]}],
             }
+            if self.m.api_model.startswith("openai/"):
+                # gpt-audio models emit speech by default; force text output
+                body["modalities"] = ["text"]
             progress(f"{self.m.name} is listening and formatting the lyrics…")
             try:
                 resp = _post_with_retries(

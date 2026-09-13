@@ -79,19 +79,19 @@ TRANSCRIBE_MODELS: dict[str, list[tuple[str, str, str, str]]] = {
         ("openai/gpt-audio-mini", "GPT Audio Mini", "audio_llm",
          "Fast, low-latency OpenAI audio model"),
         ("mistralai/voxtral-small-24b-2507", "Voxtral Small 24B", "audio_llm",
-         "Mistral audio model; strong speech transcription"),
+         "Mistral audio model; strong speech transcription (greedy sampling)"),
         ("meta/muse-spark-1.3", "Muse Spark 1.3", "audio_llm",
          "Meta multimodal audio model (privacy-locked tier)"),
         ("meta/muse-spark-1.3-contributor", "Muse Spark 1.3 (contributor)", "audio_llm",
          "Discounted tier; prompts may be used for Meta training"),
-        ("thinking-machines/inkling", "Inkling 41B", "audio_llm",
+        ("thinkingmachines/inkling", "Inkling 41B", "audio_llm",
          "Open-weight 41B MoE with native audio comprehension"),
-        ("thinking-machines/inkling-small", "Inkling Small 12B", "audio_llm",
+        ("thinkingmachines/inkling-small", "Inkling Small 12B", "audio_llm",
          "Efficient 12B MoE variant, fast audio reasoning"),
-        ("nvidia/nemotron-3-nano-omni", "Nemotron 3 Nano Omni", "audio_llm",
-         "Lightweight NVIDIA omni model (text output)"),
-        ("xiaomi/mimo-v2-omni", "MiMo v2 Omni", "audio_llm",
-         "Xiaomi 262K-context open-weights omni model"),
+        ("nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free", "Nemotron 3 Nano Omni (free)", "audio_llm",
+         "Lightweight NVIDIA omni model (free tier, reasoning)"),
+        ("xiaomi/mimo-v2.5", "MiMo v2.5", "audio_llm",
+         "Xiaomi open-weights omni model"),
     ],
     "groq": [
         ("whisper-large-v3", "Whisper large v3", "transcribe",
@@ -158,6 +158,12 @@ _MIGRATE = {
     "gemini:gemini-2.5-pro": "gemini:gemini-pro-latest",
     "gemini:google/gemini-flash-latest": "gemini:gemini-flash-latest",
     "gemini:google/gemini-pro-latest": "gemini:gemini-pro-latest",
+    # upstream slugs that were renamed/retired
+    "openrouter:xiaomi/mimo-v2-omni": "openrouter:xiaomi/mimo-v2.5",
+    "openrouter:thinking-machines/inkling": "openrouter:thinkingmachines/inkling",
+    "openrouter:thinking-machines/inkling-small": "openrouter:thinkingmachines/inkling-small",
+    "openrouter:nvidia/nemotron-3-nano-omni":
+        "openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 }
 
 
@@ -226,6 +232,12 @@ def list_providers() -> list[dict]:
 
 def formatter_default(provider: str) -> str:
     return _DEFAULT_FORMATTER_MODEL.get(provider, "")
+
+
+def formatter_catalog() -> dict:
+    """Per-provider formatter model lists for the UI (block 2 dropdowns)."""
+    return {pid: [{"api_model": api, "name": name} for api, name in models]
+            for pid, models in FORMATTER_MODELS.items()}
 
 
 def resolved_transcribe_model() -> str:

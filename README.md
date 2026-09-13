@@ -82,8 +82,8 @@ the next job (no restart).
 | `openrouter:openai/gpt-audio` · `…-mini` | audio LLM | OpenAI native audio engines |
 | `openrouter:mistralai/voxtral-small-24b-2507` | audio LLM | Mistral audio model; strong speech transcription |
 | `openrouter:meta/muse-spark-1.3` (+ contributor) | audio LLM | Meta multimodal audio (contributor = discounted, trains on prompts) |
-| `openrouter:thinking-machines/inkling` (+ small) | audio LLM | open-weight MoE models with native audio understanding |
-| `openrouter:nvidia/nemotron-3-nano-omni` · `xiaomi/mimo-v2-omni` | audio LLM | lightweight omni models |
+| `openrouter:thinkingmachines/inkling` (+ small) | audio LLM | open-weight MoE models with native audio understanding |
+| `openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` · `xiaomi/mimo-v2.5` | audio LLM | lightweight omni models |
 | `groq:whisper-large-v3` / `…-turbo` | transcriber | fast word-level timestamps (needs formatter block) |
 | `openai:whisper-1` / `gpt-4o-transcribe` / `…-mini-transcribe` | transcriber | word/segment timestamps (needs formatter block) |
 

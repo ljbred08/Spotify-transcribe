@@ -404,14 +404,13 @@
 
   /* ---------- phone / narrow ---------- */
   @media (max-width: 640px) {
-    body { flex-direction: column; }
-    /* sidebar becomes a sticky compact header: paste box always reachable */
+    body { flex-direction: column; height: auto; min-height: 100%; }
+    /* sidebar is a plain compact header at the top of the page: the WHOLE
+       document scrolls as one, so controls scroll out of the way too */
     #sidebar {
       width: 100%; height: auto; max-height: none;
       border-right: none; border-bottom: 1px solid var(--line); flex: none;
       padding: 12px 14px; gap: 10px;
-      position: sticky; top: 0; z-index: 30;
-      background: linear-gradient(180deg, var(--bg-soft) 75%, var(--bg));
     }
     /* library becomes a horizontal swipe shelf: peek implies more tracks */
     #library { flex: none; overflow: visible; }
@@ -430,7 +429,11 @@
     #models-panel { flex: none; }
     #models-panel[open] { max-height: 55vh; overflow-y: auto; }
 
-    #main { height: auto; flex: 1; min-height: 0; }
+    /* the page itself is the scroll container on phones: undo the desktop
+       viewport lock or the lyrics are unreachable */
+    #main { height: auto; flex: none; overflow: visible; }
+    #player { min-height: 0; }
+    #lyrics { flex: none; overflow: visible; }
     #hero, #wave-wrap, #controls, #export-row, #retrans-row { padding-left: 16px; padding-right: 16px; }
     #hero { padding-top: 16px; gap: 12px; }
     #hero-art { width: 56px; height: 56px; font-size: 24px; border-radius: 13px; }
@@ -809,7 +812,7 @@ async function selectTrack(trackId) {
 let lineNodes = [];     // lyric-line elements, index-aligned with currentData.lines
 let dividerNodes = [];  // {el, lineIdx, end, nextStart} instrumental breaks
 
-function _makeDivider(secs, kind, seekTo, autoSkip) {
+function _makeDivider(secs, kind, seekTo) {
   const d = document.createElement("div");
   d.className = "inst-divider";
   const label = kind === "intro" ? `${secs}s intro`
@@ -818,7 +821,7 @@ function _makeDivider(secs, kind, seekTo, autoSkip) {
     `<span class="inst-label">·· ${label} ··</span>` +
     `<span class="inst-line"></span>`;
   d.title = "Instrumental section — click to jump " +
-    (autoSkip ? "past it" : "to the end");
+    (seekTo >= (currentData ? currentData.duration || 0 : 0) - 1 ? "to the end" : "past it");
   d.addEventListener("mousedown", (e) => { downXY = [e.clientX, e.clientY]; });
   d.addEventListener("click", (e) => {
     const sel = window.getSelection && window.getSelection();
@@ -838,24 +841,23 @@ function buildLyrics() {
   wrap.innerHTML = "";
   lineNodes = [];
   dividerNodes = [];
-  // lead-in: a long intro before the first line gets a skip divider
+  // lead-in: a long intro gets a divider (click to skip — never auto-jump,
+  // or playing from 0:00 would be impossible)
   if (instThreshold > 0 && currentData.lines.length
       && currentData.lines[0].start >= instThreshold) {
     const d = _makeDivider(Math.round(currentData.lines[0].start), "intro",
-                           currentData.lines[0].start + 0.01, true);
+                           currentData.lines[0].start + 0.01);
     wrap.appendChild(d);
-    dividerNodes.push({ el: d, end: 0, nextStart: currentData.lines[0].start,
-                        skip: true });
+    dividerNodes.push({ el: d, end: 0, nextStart: currentData.lines[0].start });
   }
   let prevEnd = null;
   currentData.lines.forEach((line, idx) => {
     // Spotify-style divider inside long instrumental gaps (click = skip it)
     if (prevEnd !== null && instThreshold > 0 && line.start - prevEnd >= instThreshold) {
       const d = _makeDivider(Math.round(line.start - prevEnd), "break",
-                             line.start + 0.01, true);
+                             line.start + 0.01);
       wrap.appendChild(d);
-      dividerNodes.push({ el: d, end: prevEnd, nextStart: line.start,
-                          skip: true });
+      dividerNodes.push({ el: d, end: prevEnd, nextStart: line.start });
     }
     const div = document.createElement("div");
     div.className = "lyric-line";
@@ -889,9 +891,9 @@ function buildLyrics() {
   // jumping to the end would stop playback)
   const dur = currentData.duration || 0;
   if (instThreshold > 0 && dur && prevEnd !== null && dur - prevEnd >= instThreshold) {
-    const d = _makeDivider(Math.round(dur - prevEnd), "outro", dur, false);
+    const d = _makeDivider(Math.round(dur - prevEnd), "outro", dur);
     wrap.appendChild(d);
-    dividerNodes.push({ el: d, end: prevEnd, nextStart: dur, skip: false });
+    dividerNodes.push({ el: d, end: prevEnd, nextStart: dur });
   }
 }
 
@@ -901,7 +903,6 @@ function buildLyrics() {
    mid-flight. Now the DOM is touched only when state CHANGES.             */
 let lastActive = -1;
 let lastScrollTarget = -1;
-const INST_SKIP_HOLD = 0.8;  // seconds into a break before auto-skipping
 
 function tickLyrics() {
   if (currentData && currentData.lines.length) {
@@ -951,14 +952,11 @@ function tickLyrics() {
       }
     }
 
-    // (4) instrumental dividers: glow inside the break, auto-skip long ones
+    // (4) instrumental dividers: glow while playback is inside the break.
+    // Never auto-skips — clicking a divider jumps past it (the user decides).
     for (const d of dividerNodes) {
       const inBreak = t >= d.end && t < d.nextStart;
       d.el.classList.toggle("active", inBreak);
-      if (inBreak && d.skip && instThreshold > 0 && !audio.paused
-          && !audio.seeking && t - d.end > INST_SKIP_HOLD) {
-        audio.currentTime = d.nextStart + 0.01;
-      }
     }
 
     $("#time-cur").textContent = fmtTime(audio.currentTime);
@@ -1159,26 +1157,9 @@ async function putSettings(patch) {
 }
 
 function cloudFormatterOptions(provider) {
-  const lists = {
-    gemini: [["gemini-flash-latest", "Gemini Flash (latest)"],
-             ["gemini-pro-latest", "Gemini Pro (latest)"]],
-    openrouter: [["~google/gemini-flash-latest", "Gemini Flash (latest)"],
-                 ["~google/gemini-pro-latest", "Gemini Pro (latest)"],
-                 ["google/gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite"],
-                 ["openai/gpt-audio", "GPT Audio"],
-                 ["openai/gpt-audio-mini", "GPT Audio Mini"],
-                 ["mistralai/voxtral-small-24b-2507", "Voxtral Small 24B"],
-                 ["meta/muse-spark-1.3", "Muse Spark 1.3"],
-                 ["meta/muse-spark-1.3-contributor", "Muse Spark 1.3 (contributor)"],
-                 ["thinking-machines/inkling", "Inkling 41B"],
-                 ["thinking-machines/inkling-small", "Inkling Small 12B"],
-                 ["nvidia/nemotron-3-nano-omni", "Nemotron 3 Nano Omni"],
-                 ["xiaomi/mimo-v2-omni", "MiMo v2 Omni"]],
-    groq: [["llama-3.3-70b-versatile", "Llama 3.3 70B"],
-           ["llama-3.1-8b-instant", "Llama 3.1 8B (fast)"]],
-    openai: [["gpt-4o-mini", "GPT-4o mini"], ["gpt-4o", "GPT-4o"]],
-  };
-  return lists[provider] || [];
+  // served by /api/models (formatter_models) — single source of truth
+  const lists = ((modelsData || {}).formatter_models || {});
+  return (lists[provider] || []).map((m) => [m.api_model, m.name]);
 }
 
 function renderLlmStatus(llm, provider) {

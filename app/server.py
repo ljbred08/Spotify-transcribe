@@ -181,7 +181,8 @@ def list_models():
     data = settings.get()
     data["llmAvailable"] = formatter.llm_available()
     data["llm"] = formatter.llm_status_cached()
-    return {"models": cloud_models.list_models(), "settings": data}
+    return {"models": cloud_models.list_models(), "settings": data,
+            "formatter_models": cloud_models.formatter_catalog()}
 
 
 @app.get("/api/providers")

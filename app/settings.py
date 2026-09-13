@@ -33,6 +33,11 @@ _LEGACY_API = {  # old native model names -> new catalog api_model strings
     "google/gemini-flash-latest": "gemini-flash-latest",
     "google/gemini-pro-latest": "gemini-pro-latest",
     "gpt-4o-audio-preview": "openai/gpt-audio",
+    "xiaomi/mimo-v2-omni": "xiaomi/mimo-v2.5",
+    "thinking-machines/inkling": "thinkingmachines/inkling",
+    "thinking-machines/inkling-small": "thinkingmachines/inkling-small",
+    "nvidia/nemotron-3-nano-omni":
+        "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
 }
 
 
@@ -46,9 +51,14 @@ def _migrate(raw: dict) -> dict:
     cm = raw.get("cloud_model", "")
     if cm and ":" in cm:
         pid, api = cm.split(":", 1)
-        if pid in ("gemini", "groq", "openai"):
+        if pid in ("gemini", "groq", "openai", "openrouter"):
             raw.setdefault("transcribe_provider", pid)
             raw.setdefault("transcribe_model", _LEGACY_API.get(api, api))
+    tm = raw.get("transcribe_model", "")
+    if tm:
+        raw["transcribe_model"] = _LEGACY_API.get(tm, tm)
+    if raw.get("llm_provider") == "openrouter" and raw.get("llm_model"):
+        raw["llm_model"] = _LEGACY_API.get(raw["llm_model"], raw["llm_model"])
     return raw
 
 
