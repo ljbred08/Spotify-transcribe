@@ -59,6 +59,9 @@ class Pipeline:
             if job.kind == "retranscribe":
                 self._run_retranscribe(job)
                 return
+            if job.kind == "improve_sync":
+                self._run_improve_sync(job)
+                return
             self._progress(job, JobStatus.DOWNLOADING, "Resolving track…")
             self._check_canceled(job)
             dl = downloader.download_audio(job.url, cfg.DATA_DIR / "audio", job.id)
@@ -92,11 +95,10 @@ class Pipeline:
         if fresh and fresh.cancel_requested:
             raise JobCanceled("Canceled")
 
-    def _run_transcribe_with_timeout(self, job: Job, audio_path: Path, *,
-                                     title: str, artist: str):
-        """Run the transcribe+format stage with a cancel/timeout watchdog.
+    def _with_watchdog(self, job: Job, work):
+        """Run work() with the cancel/timeout watchdog around it.
 
-        The stage runs in a worker thread (can't be killed); the watchdog
+        The work runs in this worker thread (can't be killed); the watchdog
         marks cancel_requested on expiry, then reports the timeout error
         itself. The worker either notices the flag at the next progress
         callback, or its HTTP call eventually returns and its write is
@@ -122,11 +124,16 @@ class Pipeline:
         wt = threading.Thread(target=watchdog, name=f"wd-{job.id}", daemon=True)
         wt.start()
         try:
-            result, lines, llm_note = self._transcribe_and_format(
-                job, audio_path, title=title, artist=artist)
-            return result, lines, llm_note
+            return work()
         finally:
             fired.set()   # release the watchdog thread immediately
+
+    def _run_transcribe_with_timeout(self, job: Job, audio_path: Path, *,
+                                     title: str, artist: str):
+        """Run the transcribe+format stage with a cancel/timeout watchdog."""
+        return self._with_watchdog(
+            job, lambda: self._transcribe_and_format(
+                job, audio_path, title=title, artist=artist))
 
     def _transcribe_and_format(self, job: Job, audio_path: Path, *,
                                title: str = "", artist: str = ""):
@@ -208,6 +215,55 @@ class Pipeline:
         self.store.update_job(job.id, status=JobStatus.DONE,
                               message=f"Done via {result.backend} · "
                                       f"{len(lines)} lines{llm_note} · v{version} (kept v{version - 1})")
+
+    def _run_improve_sync(self, job: Job) -> None:
+        """Retime the ACTIVE transcript with a transcription-only model.
+
+        Words and line breaks come from the current (good) transcript;
+        timings come from the reference run — a transcribe-only backend's
+        measured timestamps instead of an omni model's generated ones.
+        """
+        from app.sync import improve_sync
+        track = self.store.get_track(job.track_id or "")
+        if not track or not track.audio_file or not track.audio_file.exists():
+            raise transcribe.TranscribeError("Track audio is missing — cannot improve sync")
+        current = self.store.load_transcript(track.id)
+        if not current:
+            raise transcribe.TranscribeError("Track has no transcript to improve")
+
+        # 1) reference run: transcription-only backend, no formatting stage
+        job_now = self.store.get_job(job.id) or job
+        backend, note = transcribe.pick_backend(
+            backend=job_now.retranscribe_backend, model=job_now.retranscribe_model)
+        if backend is None:
+            raise transcribe.TranscribeError(note)
+        result = self._with_watchdog(
+            job, lambda: backend.transcribe(
+                track.audio_file, lambda m: self._say(job, m),
+                title=track.title, artist=track.artist))
+
+        # 2) retime the good transcript from the reference's word timings
+        self._progress(job, JobStatus.ALIGNING,
+                       "Aligning reference timings to the current lyrics…")
+        new_lines, stats = improve_sync(current, result.words)
+        note = (f"sync improved via {result.backend} "
+                f"({stats['matched']}/{stats['old_words']} matched, "
+                f"{stats['forced']} forced, {stats['kept']} kept, "
+                f"{stats['dropped']} dropped)")
+        # the words/lines still come from the active transcript's model —
+        # record THAT as the backend (keeps omni-lineage versions improvable
+        # and visible under Post-processing); the reference goes in the note
+        idx = self.store.list_versions(track.id) or {"versions": []}
+        active_v = next((v for v in idx["versions"]
+                         if v["version"] == idx.get("active")), None)
+        backend_label = (active_v or {}).get("backend") or result.backend
+        version = self.store.save_transcript(track.id, new_lines,
+                                             backend=backend_label, note=note)
+        self.store.update_job(
+            job.id, status=JobStatus.DONE,
+            message=f"Sync improved · {stats['matched']}/{stats['old_words']} "
+                    f"words retimed ({stats['kept']} kept, "
+                    f"{stats['dropped']} dropped) · v{version}")
 
     def _progress(self, job: Job, status: JobStatus, message: str) -> None:
         self.store.update_job(job.id, status=status, message=message)

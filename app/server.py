@@ -138,6 +138,31 @@ def retranscribe_track(track_id: str, body: RetranscribeIn):
     return {"id": job.id, "status": job.status.value, "message": job.message}
 
 
+@app.post("/api/tracks/{track_id}/improve_sync")
+def improve_sync_track(track_id: str, body: RetranscribeIn):
+    """Retime the active transcript from a transcription-only reference run."""
+    track = store.get_track(track_id)
+    if not track:
+        raise HTTPException(404, "track not found")
+    if not track.audio_file or not track.audio_file.exists():
+        raise HTTPException(409, "audio file missing — cannot improve sync")
+    if store.load_transcript(track_id) is None:
+        raise HTTPException(409, "no transcript to improve")
+    model_id = body.model or body.backend
+    if not model_id:
+        raise HTTPException(400, "a transcription model is required")
+    spec = cloud_models.get_model(model_id)
+    if spec is None:
+        raise HTTPException(400, f"unknown model '{model_id}'")
+    if spec.kind != "transcribe":
+        raise HTTPException(400, "improve sync needs a transcription-only "
+                                 "model (Whisper etc.), not an audio LLM")
+    job = store.create_job(
+        track.url, kind="improve_sync", track_id=track_id,
+    retranscribe_backend=model_id, retranscribe_model=model_id)
+    return {"id": job.id, "status": job.status.value, "message": job.message}
+
+
 @app.get("/api/tracks/{track_id}/versions")
 def list_versions(track_id: str):
     if not store.get_track(track_id):

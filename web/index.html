@@ -351,6 +351,39 @@
   select.ver-select option { color: var(--text); background: var(--panel-2); }
   .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
 
+  /* ---------- post-processing ---------- */
+  #post-row { display: flex; justify-content: flex-end; padding: 0 44px 8px; }
+  .pp-wrap { position: relative; }
+  .pp-menu {
+    display: none; position: absolute; right: 0; top: calc(100% + 6px);
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 10px; min-width: 200px; z-index: 30; overflow: hidden;
+    box-shadow: 0 10px 28px rgba(0,0,0,.45);
+  }
+  .pp-menu.open { display: block; }
+  .pp-menu button {
+    display: block; width: 100%; text-align: left; background: none;
+    border: none; color: var(--text); padding: 9px 12px; font-size: 12.5px;
+    cursor: pointer; white-space: nowrap;
+  }
+  .pp-menu button:hover { background: rgba(30,215,96,.08); color: var(--accent); }
+
+  /* ---------- modal ---------- */
+  #modal-overlay {
+    display: none; position: fixed; inset: 0; z-index: 100;
+    background: rgba(5,8,14,.72); align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  #modal-overlay.open { display: flex; }
+  .modal {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: var(--radius); width: 520px; max-width: 100%;
+    max-height: 90vh; overflow-y: auto; padding: 18px;
+  }
+  .modal h3 { font-size: 15px; margin-bottom: 4px; }
+  .modal .modal-sub { color: var(--muted); font-size: 12px; line-height: 1.55; margin-bottom: 10px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
   .export-btn {
     background: var(--panel); color: var(--text);
     border: 1px solid var(--line); border-radius: 999px;
@@ -607,6 +640,15 @@
       <span id="version-pills"></span>
     </div>
 
+    <div id="post-row" style="display:none">
+      <div class="pp-wrap">
+        <button class="export-btn" id="pp-btn">⚙ Post-processing ▾</button>
+        <div class="pp-menu" id="pp-menu">
+          <button id="pp-improve-sync" title="Re-time this transcript using a transcription-only model's measured timestamps">⏱ Improve sync…</button>
+        </div>
+      </div>
+    </div>
+
     <div id="wave-wrap">
       <canvas id="waveform" height="84"></canvas>
       <div id="time-row"><span id="time-cur">0:00</span><span id="time-total">0:00</span></div>
@@ -639,6 +681,43 @@
 
   <audio id="audio" preload="auto"></audio>
 </main>
+
+<div id="modal-overlay">
+  <div class="modal">
+    <h3>⏱ Improve sync</h3>
+    <p class="modal-sub">Runs a transcription-only model to get measured word
+    timestamps, then re-aligns this transcript's words to them. Your lyrics'
+    text and line breaks are kept — only timings change. Missing words are
+    interpolated, misheard words take their neighbour's timing, invented
+    reference words are dropped. The result is saved as a new version.</p>
+    <div class="backend-row">
+      <label for="is-method">Method</label>
+      <select id="is-method">
+        <option value="cloud">Cloud transcription</option>
+        <option value="local" disabled>Local (coming soon)</option>
+      </select>
+    </div>
+    <div id="is-model-fields">
+      <div class="backend-row">
+        <label for="is-provider">Provider</label>
+        <select id="is-provider"></select>
+      </div>
+      <div class="backend-row">
+        <label for="is-model">Model</label>
+        <select id="is-model"></select>
+      </div>
+      <div class="backend-row">
+        <label for="is-key">API key</label>
+        <input type="password" id="is-key" autocomplete="off" spellcheck="false" placeholder="(not set)" />
+        <span id="is-key-state" class="key-state"></span>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="model-btn" id="is-cancel">Cancel</button>
+      <button class="primary" id="is-go" style="padding:8px 16px; font-size:13px;">Improve sync</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = (sel) => document.querySelector(sel);
@@ -870,6 +949,13 @@ async function loadVersions(trackId) {
       $("#badge-lines").textContent = `${activeV.lines ?? currentData.lines.length} lines`;
     const reBtn = $("#re-btn");
     if (reBtn) reBtn.dataset.versions = String(versions.length);
+    // Post-processing only makes sense for omni-model transcripts (their
+    // timings are generated, not measured). Look up the ACTIVE version's
+    // backend kind from the catalog cache; hide the row otherwise.
+    const activeKind = activeV && activeV.backend
+      ? ((modelsData || {}).models || []).find((m) => m.id === activeV.backend)
+      : null;
+    $("#post-row").style.display = activeKind && activeKind.kind === "audio_llm" ? "" : "none";
   } catch { /* non-fatal */ }
 }
 
@@ -1307,6 +1393,9 @@ function renderConfig(data) {
 async function refreshModels() {
   try {
     renderConfig(await fetchConfig());
+    // catalog may have arrived after a track was selected: re-apply the
+    // post-processing visibility rule with real model kinds now
+    if (currentTrack) loadVersions(currentTrack);
   } catch { /* server not up yet */ }
 }
 
@@ -1444,6 +1533,92 @@ $("#llm-discover").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
     btn.textContent = "Auto-discover";
+  }
+});
+
+/* ---------------- post-processing ---------------- */
+$("#pp-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#pp-menu").classList.toggle("open");
+});
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".pp-wrap")) $("#pp-menu").classList.remove("open");
+});
+
+/* --- improve-sync modal --- */
+function isTranscribeOnlyModels(provider) {
+  return ((modelsData || {}).models || [])
+    .filter((m) => m.provider === provider && m.kind === "transcribe");
+}
+
+function renderIsModal() {
+  const provSel = $("#is-provider");
+  fillProviderSelect(provSel, "transcribe", provSel.value || "groq");
+  const prov = provSel.value || "groq";
+  const models = isTranscribeOnlyModels(prov);
+  fillModelSelect($("#is-model"),
+                  models.map((m) => [m.api_model, m.name]),
+                  models.length ? models[0].api_model : "");
+  renderKeyState($("#is-key-state"), $("#is-key"),
+                 providersCache.find((p) => p.id === prov) || {});
+}
+
+function openIsModal() {
+  $("#pp-menu").classList.remove("open");
+  if (!modelsData) { refreshModels().then(() => renderIsModal()); }
+  else renderIsModal();
+  $("#modal-overlay").classList.add("open");
+}
+
+function closeIsModal() {
+  $("#modal-overlay").classList.remove("open");
+  const btn = $("#is-go");
+  btn.textContent = "Improve sync";
+  btn.disabled = false;
+}
+
+$("#pp-improve-sync").addEventListener("click", openIsModal);
+$("#is-cancel").addEventListener("click", closeIsModal);
+$("#modal-overlay").addEventListener("click", (e) => {
+  if (e.target === e.currentTarget) closeIsModal();
+});
+$("#is-method").addEventListener("change", () => {
+  $("#is-model-fields").style.display = $("#is-method").value === "cloud" ? "" : "none";
+});
+$("#is-provider").addEventListener("change", renderIsModal);
+$("#is-key").addEventListener("change", async () => {
+  const val = $("#is-key").value.trim();
+  if (!val) return;
+  await putSettings({ keys: { [$("#is-provider").value]: val } });
+  $("#is-key").value = "";
+  refreshModels();
+  renderIsModal();
+});
+
+$("#is-go").addEventListener("click", async () => {
+  const btn = $("#is-go");
+  if (!currentTrack) return;
+  if ($("#is-method").value !== "cloud") {
+    btn.textContent = "Local method is not available yet";
+    setTimeout(() => { btn.textContent = "Improve sync"; }, 2500);
+    return;
+  }
+  const model = `${$("#is-provider").value}:${$("#is-model").value}`;
+  btn.disabled = true;
+  try {
+    const res = await fetch(`/api/tracks/${currentTrack}/improve_sync`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ model }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || "failed");
+    closeIsModal();
+    showJobCard({ status: data.status, message: "Queued" });
+    pollJob(data.id);
+  } catch (err) {
+    $("#is-go").textContent = String(err.message || err);
+    setTimeout(() => { btn.textContent = "Improve sync"; btn.disabled = false; }, 3500);
   }
 });
 
