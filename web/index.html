@@ -1251,7 +1251,7 @@ speeds.forEach((s) => {
 });
 
 /* ---------------- exports ---------------- */
-document.querySelectorAll(".export-btn").forEach((btn) => {
+document.querySelectorAll(".export-btn[data-fmt]").forEach((btn) => {
   btn.addEventListener("click", () => {
     if (!currentTrack) return;
     window.location.href = `/api/tracks/${currentTrack}/export?fmt=${btn.dataset.fmt}`;
