@@ -1,4 +1,4 @@
-"""Download audio: Spotify URLs via sfotipy metadata+matching, else yt-dlp direct."""
+"""Download audio: Spotify URLs via spotdl metadata+matching, else yt-dlp direct."""
 from __future__ import annotations
 
 import re
@@ -8,6 +8,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import app.config as cfg
+
+
+def _import_spotdl():
+    """Import spotdl pieces lazily so the module loads without spotdl too."""
+    from spotdl.providers.audio.youtube import YouTube
+    from spotdl.providers.audio.ytmusic import YouTubeMusic
+    from ytmusicapi import YTMusic
+
+    return YouTube, YouTubeMusic, YTMusic
+
+
+YouTube, YouTubeMusic, YTMusic = _import_spotdl()
 
 
 @dataclass
@@ -106,78 +118,98 @@ def _print_json(proc: subprocess.CompletedProcess) -> dict | None:
     return None
 
 
-# --- Spotify path (sfotipy metadata + ytmusicapi match, then yt-dlp) ---------
+# --- Spotify path (spotdl metadata + matching, then yt-dlp) -----------------
 
-def _spotify_track(url: str) -> dict:
-    """Fetch canonical Spotify metadata for a track URL."""
-    from sfotipy import downloader as sf
-    tracks, dicts = sf.get_track_metadata(url)
-    if not dicts:
-        raise DownloadError("Could not fetch Spotify metadata for this URL "
-                            "(is it a valid track link?)")
-    return dicts[0]
+_SPOTIFY_CLIENT_READY = False
 
 
-def _resolve_youtube_id(track: dict) -> str:
-    """Resolve a Spotify track dict to a YouTube( Music) video id.
+def _ensure_spotify_client() -> None:
+    """Initialize spotdl's Spotify client once (its public default creds).
 
-    Uses sfotipy's ytmusicapi matcher with its strict threshold, then falls
-    back to a duration-aware best-of search so near-matches like differing
-    artist spellings still resolve.
+    spotdl ships its own client_id/secret (the same ones its CLI uses), so
+    users don't need their own Spotify developer app. Set SPOTIPY_CLIENT_ID
+    / SPOTIPY_CLIENT_SECRET env vars to override.
     """
-    from ytmusicapi import YTMusic
-    from sfotipy import downloader as sf, matcher as sfm
+    global _SPOTIFY_CLIENT_READY
+    if _SPOTIFY_CLIENT_READY:
+        return
+    import os
 
-    yt = YTMusic()
-    vid = sfm.find_best_match(track, source="auto", timeout=15)
-    if vid:
-        return vid
+    from spotdl.utils.config import DEFAULT_CONFIG
+    from spotdl.utils.spotify import SpotifyClient
 
-    # Fallback: score results ourselves, leaning on duration agreement.
-    expected = int(track.get("duration_seconds") or 0)
-    best_id, best_score = None, 0.0
-    for flt in ("songs", "videos"):
+    SpotifyClient.init(
+        os.environ.get("SPOTIPY_CLIENT_ID") or DEFAULT_CONFIG["client_id"],
+        os.environ.get("SPOTIPY_CLIENT_SECRET") or DEFAULT_CONFIG["client_secret"],
+        user_auth=False,
+        no_cache=True,
+        headless=True,
+        use_cache_file=False,
+        max_retries=3,
+    )
+    _SPOTIFY_CLIENT_READY = True
+
+
+class _FixedYTMusic(YouTubeMusic):
+    """YouTubeMusic with the default-language client.
+
+    spotdl 4.5.2 hardcodes ``YTMusic(language="de")``, which currently returns
+    ZERO results from the YouTube Music search endpoint. The default-language
+    client works, so patch it here (upstream may fix; subclassing keeps us
+    compatible either way).
+    """
+
+    @staticmethod
+    def _create_client() -> YTMusic:  # type: ignore[override]
+        return YTMusic()
+
+
+def _spotify_song(url: str) -> "Song":
+    """Fetch canonical Spotify metadata for a track URL as a spotdl Song."""
+    _ensure_spotify_client()
+    from spotdl.types.song import Song
+
+    return Song.from_url(url)
+
+
+def _resolve_youtube_url(song: "Song") -> str:
+    """Resolve a spotdl Song to a YouTube Music url via spotdl's matcher.
+
+    Tries the YT Music provider first (structured metadata, verified-song
+    results), then the plain YouTube provider (ytsearch-based) as fallback.
+    spotdl's matching scores title/artist/album/duration together and hard-
+    skips candidates whose artist or name don't overlap — the failure mode
+    that picked wrong videos before.
+    """
+    errors: list[str] = []
+    for provider_cls in (_FixedYTMusic, YouTube):
         try:
-            results = yt.search(f"{track.get('artist')} {track.get('title')}",
-                                filter=flt) or []
-        except Exception:
+            provider = provider_cls(output_format="m4a")
+            result_url = provider.search(song)
+        except Exception as exc:  # noqa: BLE001 - provider can raise mid-search
+            errors.append(f"{provider_cls.__name__}: {exc}")
             continue
-        for item in results:
-            video_id = item.get("videoId")
-            if not video_id:
-                continue
-            cand = sfm._result_to_dict(item)
-            score = sf.score_match(cand, track.get("title", ""),
-                                   track.get("artist", ""), expected)
-            # reward duration agreement (±3s), which is track-fingerprint-ish
-            dur = int(cand.get("duration") or 0)
-            if expected and dur:
-                if abs(dur - expected) <= 3:
-                    score += 0.25
-                elif abs(dur - expected) > 20:
-                    score -= 0.2
-            if score > best_score:
-                best_score, best_id = score, video_id
-    if best_id and best_score >= 0.5:
-        return best_id
+        if result_url:
+            return result_url
+        errors.append(f"{provider_cls.__name__}: no confident match")
     raise DownloadError(
-        f"No confident YouTube match for '{track.get('artist')} - {track.get('title')}'")
+        f"No confident YouTube match for '{song.artist} - {song.name}' "
+        f"({'; '.join(errors)})")
 
 
 def _download_spotify(url: str, dest_dir: Path, job_id: str) -> DownloadResult:
-    track = _spotify_track(url)
-    video_id = _resolve_youtube_id(track)
-    result = _run_ytdlp(f"https://www.youtube.com/watch?v={video_id}",
-                        dest_dir, job_id)
-    # keep canonical Spotify metadata (artist/title), keep resolved duration
-    result.title = track.get("title") or result.title
-    result.artist = track.get("artist") or result.artist
-    result.thumbnail_url = track.get("cover_url") or result.thumbnail_url
+    song = _spotify_song(url)
+    video_url = _resolve_youtube_url(song)
+    result = _run_ytdlp(video_url, dest_dir, job_id)
+    # keep canonical Spotify metadata (artist/title/cover), keep resolved duration
+    result.title = song.name or result.title
+    result.artist = song.artist or result.artist
+    result.thumbnail_url = song.cover_url or result.thumbnail_url
     return result
 
 
 def download_audio(url: str, dest_dir: Path, job_id: str) -> DownloadResult:
-    """Route Spotify URLs through sfotipy metadata; everything else via yt-dlp."""
+    """Route Spotify URLs through spotdl metadata; everything else via yt-dlp."""
     if is_spotify_url(url):
         return _download_spotify(url, dest_dir, job_id)
     return _run_ytdlp(url, dest_dir, job_id)

@@ -4,8 +4,8 @@ Paste a song link → get a karaoke-style synced transcript you can read along w
 then export as **LRC / SRT / VTT / TXT / JSON**.
 
 ```
-Spotify URL ──▶ sfotipy metadata ──▶ ytmusicapi match ──▶ yt-dlp ─┐
-YouTube URL ──────────────────────────────────────────▶ yt-dlp ─┤
+Spotify URL ──▶ spotdl metadata ──▶ spotdl match ──────▶ yt-dlp ─┐
+YouTube URL ────────────────────────────────────────────▶ yt-dlp ─┤
                                                                  ▼
               cloud transcription ◀── audio (m4a)
    audio-LLM (one step, formatted + synced)  or  transcriber + LLM formatter
@@ -33,9 +33,11 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 
 ## How it works
 
-1. **Download** — Spotify URLs are resolved via **sfotipy** (canonical track
-   metadata from the Spotify page) then matched to a YouTube Music video with
-   **ytmusicapi** (duration-aware fallback included); YouTube and other URLs go
+1. **Download** — Spotify URLs are resolved via **spotdl** (canonical track
+   metadata from Spotify, using spotdl's public client — override with
+   `SPOTIPY_CLIENT_ID`/`SPOTIPY_CLIENT_SECRET` if you like) then matched to a
+   YouTube Music video by spotdl's battle-tested matcher (title/artist/album/
+   duration scoring, with a plain-YouTube fallback); YouTube and other URLs go
    straight to yt-dlp. Audio is pulled as m4a via ffmpeg.
 2. **Transcribe** — two cloud paths, chosen per model in the Models panel:
    - **Audio LLMs** (Gemini via Google/OpenRouter, GPT Audio, Voxtral, Muse Spark,
