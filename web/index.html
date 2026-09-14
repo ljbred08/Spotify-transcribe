@@ -418,7 +418,7 @@
     color: var(--text);
     transform: scale(1.02);
   }
-  .lyric-line .word { transition: color .1s; }
+  .lyric-line .word { transition: none; } /* color transitions flash against the instantly-appearing singing gradient */
   .inst-divider {
     display: flex; align-items: center; gap: 14px;
     padding: 16px 0; color: #4a5468; font-size: 13px; font-weight: 600;
@@ -902,7 +902,8 @@ async function loadVersions(trackId) {
     const idx = await res.json();
     const versions = idx.versions || [];
     const pillLabel = (v) =>
-      `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`;
+      `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`
+      + (v.note && v.note.startsWith("sync improved") ? " · sync" : "");
     const pillTitle = (v) =>
       (v.note || (v.backend ? `via ${v.backend}` : ""))
       + (v.lines ? ` — ${v.lines} lines` : "");
