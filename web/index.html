@@ -392,7 +392,7 @@
      instead of crushing the other columns. */
   #retrans-row {
     display: grid; align-items: center; gap: 8px;
-    grid-template-columns: 40px max-content minmax(0, 1fr);
+    grid-template-columns: 40px max-content max-content minmax(0, 1fr);
     padding: 0 44px 10px;
   }
   /* fixed-size arrow-only control: the grid track guarantees it can never
@@ -437,7 +437,6 @@
   .match-badge.low { color: #fbbf24; }
 
   /* ---------- post-processing ---------- */
-  #post-row { display: flex; justify-content: flex-end; padding: 0 44px 8px; }
   .pp-wrap { position: relative; }
   .pp-menu {
     display: none; position: absolute; right: 0; top: calc(100% + 6px);
@@ -608,8 +607,8 @@
     #hero-meta p { font-size: 13px; }
     #hero-badges { margin-top: 8px; gap: 6px; flex-wrap: wrap; }
     /* pills always get their own full row under the picker + button */
-    #retrans-row { grid-template-columns: minmax(0, 1fr) auto; padding-bottom: 8px; }
-    #version-pills { grid-column: 1 / -1; justify-content: flex-start; max-width: none; }
+    #retrans-row { display: flex; flex-wrap: wrap; padding-bottom: 8px; }
+    #version-pills { flex: 1 1 100%; justify-content: flex-start; max-width: none; }
     #waveform { height: 56px; }
     #controls { flex-wrap: wrap; gap: 10px; padding-top: 12px; }
     /* speeds take their own centered row instead of squeezing the transport */
@@ -747,16 +746,13 @@
     <div id="retrans-row">
       <select id="re-model" title="Model for the next re-transcription"></select>
       <button class="text-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept"><i data-i="refresh"></i> Re-transcribe</button>
-      <span id="version-pills"></span>
-    </div>
-
-    <div id="post-row" style="display:none">
-      <div class="pp-wrap">
-        <button class="export-btn" id="pp-btn"><i data-i="setting"></i> Post-processing <i data-i="down-c" class="caret"></i></button>
+      <div class="pp-wrap" id="pp-wrap" style="display:none">
+        <button class="text-btn" id="pp-btn" title="Post-processing tools (omni-model transcripts only)"><i data-i="timer"></i> Post-processing <i data-i="down-c" class="caret"></i></button>
         <div class="pp-menu" id="pp-menu">
           <button id="pp-improve-sync" title="Re-time this transcript using a transcription-only model's measured timestamps"><i data-i="timer"></i> Improve sync…</button>
         </div>
       </div>
+      <span id="version-pills"></span>
     </div>
 
     <div id="wave-wrap">
@@ -765,11 +761,11 @@
     </div>
 
     <div id="controls">
-      <button class="ctrl-btn" id="skip-start-btn" title="Skip to beginning"><i data-i="go-start"></i></button>
-      <button class="ctrl-btn" id="rew-btn" title="Back 5s"><i data-i="double-left"></i></button>
-      <button class="ctrl-btn" id="play-btn" title="Play / pause">▶</button>
-      <button class="ctrl-btn" id="fwd-btn" title="Forward 5s"><i data-i="double-right"></i></button>
-      <button class="ctrl-btn" id="skip-end-btn" title="Skip to end"><i data-i="go-end"></i></button>
+      <button class="ctrl-btn" id="skip-start-btn" title="Skip to beginning (Home)"><i data-i="go-start"></i></button>
+      <button class="ctrl-btn" id="rew-btn" title="Back 5s (←)"><i data-i="double-left"></i></button>
+      <button class="ctrl-btn" id="play-btn" title="Play / pause (Space)">▶</button>
+      <button class="ctrl-btn" id="fwd-btn" title="Forward 5s (→)"><i data-i="double-right"></i></button>
+      <button class="ctrl-btn" id="skip-end-btn" title="Skip to end (End)"><i data-i="go-end"></i></button>
       <div class="speed-group" id="speed-group"></div>
       <div class="pp-wrap view-wrap">
         <button class="speed-btn" id="view-btn" title="View options: line timestamps, instrumental breaks"><i data-i="setting"></i></button>
@@ -1128,7 +1124,7 @@ async function loadVersions(trackId) {
     const activeKind = activeV && activeV.backend
       ? ((modelsData || {}).models || []).find((m) => m.id === activeV.backend)
       : null;
-    $("#post-row").style.display = activeKind && activeKind.kind === "audio_llm" ? "" : "none";
+    $("#pp-wrap").style.display = activeKind && activeKind.kind === "audio_llm" ? "" : "none";
   } catch { /* non-fatal */ }
 }
 
@@ -1605,6 +1601,25 @@ $("#skip-end-btn").addEventListener("click", () => {
 });
 $("#rew-btn").addEventListener("click", () => audio.currentTime = Math.max(0, audio.currentTime - 5));
 $("#fwd-btn").addEventListener("click", () => audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5));
+
+/* ---------------- keyboard shortcuts (shown in the button tooltips) ---- */
+document.addEventListener("keydown", (e) => {
+  const t = e.target;
+  if (t && t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (e.key === " ") {
+    e.preventDefault();               // keep the focused button from re-firing
+    if (audio.paused) audio.play().catch(() => {}); else audio.pause();
+  } else if (e.key === "ArrowLeft") {
+    audio.currentTime = Math.max(0, audio.currentTime - 5);
+  } else if (e.key === "ArrowRight") {
+    audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5);
+  } else if (e.key === "Home") {
+    audio.currentTime = 0;
+  } else if (e.key === "End") {
+    audio.currentTime = Math.max(0, (audio.duration || 0) - 0.05);
+  }
+});
 
 const speeds = [0.75, 1, 1.25, 1.5];
 const sg = $("#speed-group");
