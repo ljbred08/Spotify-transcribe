@@ -218,11 +218,16 @@
     border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 4px;
   }
   .combo.open .combo-pop { display: block; }
+  /* provider section headers render as teeny inline rules ("--- OpenRouter ---")
+     so grouping costs no vertical space */
   .combo-head {
-    position: sticky; top: 0; background: var(--panel-2);
-    color: var(--muted); font-size: 10px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .1em;
-    padding: 7px 8px 5px; cursor: default;
+    display: flex; align-items: center; gap: 6px;
+    color: var(--muted); font-size: 9px; font-weight: 600;
+    letter-spacing: .06em; text-transform: uppercase;
+    opacity: .55; padding: 4px 6px 2px; cursor: default; user-select: none;
+  }
+  .combo-head::before, .combo-head::after {
+    content: ""; flex: 1; height: 1px; background: var(--line);
   }
   .combo-opt {
     display: block; width: 100%; text-align: left; background: none;
@@ -1070,12 +1075,14 @@ async function loadRetransModels() {
     const groups = [];
     for (const m of models) {
       if (!m.available) continue;
-      const label = m.group || (m.kind === "audio_llm" ? "Audio LLM" : "Transcriber");
+      const label = m.provider;
       let g = groups.find((x) => x.label === label);
       if (!g) { g = { label, sel: document.createElement("optgroup") }; groups.push(g); }
       const opt = document.createElement("option");
       opt.value = m.id;
-      opt.textContent = m.kind === "audio_llm" ? m.name : m.name + " · timed";
+      const provName = providerShortLabel(m.provider);
+      const name = m.name.includes(provName) ? m.name : `${m.name} · ${provName}`;
+      opt.textContent = m.kind === "audio_llm" ? name : name + " · timed";
       g.sel.appendChild(opt);
     }
     for (const g of groups) {
@@ -1778,14 +1785,15 @@ function syncCombo(sel) {
     });
     pop.appendChild(b);
   };
-  // walk the select's children in order: top-level <option>s (flat lists)
-  // and <optgroup label> wrappers (grouped lists, options nested inside)
+  let lastHead = null;   // the last header is removed once its group ends
   for (const node of sel.children) {
     if (node.tagName === "OPTGROUP") {
+      if (lastHead) lastHead.style.display = "none";   // no trailing header
       const h = document.createElement("div");
       h.className = "combo-head";
       h.textContent = node.label;
       pop.appendChild(h);
+      lastHead = h;
       for (const opt of node.children) addOpt(opt);
     } else if (node.tagName === "OPTION") {
       addOpt(node);
@@ -1800,15 +1808,26 @@ document.addEventListener("click", (e) => {
   }
 });
 
-/* grouped variant: models carry a server-provided `group` label and are
-   rendered under sticky headers (Audio LLM vs Transcriber sections) */
+/* grouped variant: options are grouped by PROVIDER and names carry a tiny
+   provider suffix ("GPT Audio · OpenAI") so same-named models disambiguate */
+function providerShortLabel(pid) {
+  const p = (providersCache || []).find((x) => x.id === pid);
+  if (p) return p.label.replace(/\s*\(.*$/, "");   // "Ollama (local, free)" -> "Ollama"
+  return { gemini: "Google", openrouter: "OpenRouter", groq: "Groq",
+           openai: "OpenAI", ollama: "Ollama" }[pid] || pid;
+}
+
 function fillGroupedModelSelect(sel, models, current) {
   sel.innerHTML = "";
+  // group by PROVIDER (not by model kind): same-name models from different
+  // providers then disambiguate via the tiny suffix ("GPT Audio · OpenAI")
   const groups = [];
   for (const m of models || []) {
-    let g = groups.find((x) => x.label === (m.group || "Models"));
-    if (!g) { g = { label: m.group || "Models", opts: [] }; groups.push(g); }
-    g.opts.push([m.api_model, m.name]);
+    let g = groups.find((x) => x.label === m.provider);
+    if (!g) { g = { label: m.provider, opts: [] }; groups.push(g); }
+    const provName = providerShortLabel(m.provider);
+    const label = m.name.includes(provName) ? m.name : `${m.name} · ${provName}`;
+    g.opts.push([m.api_model, label]);
   }
   for (const g of groups) {
     const og = document.createElement("optgroup");
