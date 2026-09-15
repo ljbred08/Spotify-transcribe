@@ -42,21 +42,26 @@
     gap: 14px;
     height: 100vh;
   }
-  /* collapse/expand: a small thumb in the standard place (half over the
-     edge); when collapsed the sidebar itself is gone and the thumb stays
-     pinned to the screen edge to bring it back */
+  /* collapse/expand: a small icon in the sidebar header; collapsed state is
+     a compact one-button-wide rail (logo mark + expand icon), not empty */
   #side-toggle {
-    position: fixed; top: 14px; left: 328px; z-index: 70;
-    width: 24px; height: 48px; border: 1px solid var(--line);
-    border-radius: 10px; background: var(--panel); color: var(--muted);
-    cursor: pointer; display: grid; place-items: center;
-    transition: left .22s ease, color .15s, border-color .15s;
+    margin-left: auto; flex: none;
+    background: none; border: none; color: var(--muted);
+    width: 28px; height: 28px; border-radius: 8px; cursor: pointer;
+    display: grid; place-items: center;
+    transition: color .15s, background .15s;
   }
-  #side-toggle:hover { color: var(--text); border-color: #2f3950; }
-  #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .22s ease; }
-  body.side-collapsed #side-toggle { left: 0; border-radius: 0 10px 10px 0; }
+  #side-toggle:hover { color: var(--text); background: var(--panel-2); }
+  #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .2s ease; }
+  body.side-collapsed #sidebar {
+    width: 56px; min-width: 56px; padding: 16px 10px; gap: 12px;
+    align-items: center;
+  }
+  body.side-collapsed .logo { flex-direction: column; gap: 12px; padding: 0; }
+  body.side-collapsed .logo-text, body.side-collapsed form#new-job,
+  body.side-collapsed #job-card, body.side-collapsed #library,
+  body.side-collapsed #models-panel { display: none; }
   body.side-collapsed #side-toggle .ip-icon { transform: rotate(180deg); }
-  body.side-collapsed #sidebar { display: none; }
   .logo { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
   .logo-mark {
     width: 34px; height: 34px; border-radius: 10px;
@@ -592,9 +597,11 @@
   /* default = "glow" (per-word); the sweep style ignores the word classes */
   body.hl-glow .lyric-line.active .word { color: #3d4557; }
 
-  /* ---------- empty state ---------- */
+  /* ---------- empty state ----------
+     visible by default: a fresh load with no track selected must show the
+     intro, not a blank main area (selectTrack hides it) */
   #empty {
-    flex: 1; display: none;
+    flex: 1; display: flex;
     flex-direction: column; align-items: center; justify-content: center;
     gap: 14px; text-align: center; padding: 40px;
   }
@@ -649,10 +656,6 @@
   /* ---------- phone / narrow ---------- */
   @media (max-width: 640px) {
     body { flex-direction: column; height: auto; min-height: 100%; }
-    /* sidebar collapse toggle: on phones the sidebar is a top block, so the
-       standard edge thumb sits at the very top and the sidebar just hides */
-    #side-toggle { top: 2px; left: auto; right: 0; width: 30px; height: 30px; }
-    body.side-collapsed #side-toggle { left: auto; }
     /* sidebar is a plain compact header at the top of the page: the WHOLE
        document scrolls as one, so controls scroll out of the way too */
     #sidebar {
@@ -711,14 +714,13 @@
 <aside id="sidebar">
   <div class="logo">
     <div class="logo-mark"><i data-i="music"></i></div>
-    <div><h1>Refrain</h1><span>song → synced transcript</span></div>
+    <div class="logo-text"><h1>Refrain</h1><span>song → synced transcript</span></div>
+    <button id="side-toggle" type="button" title="Hide sidebar">
+      <i data-i="double-left"></i>
+    </button>
   </div>
 
-  <button id="side-toggle" type="button" title="Hide sidebar">
-    <i data-i="double-left"></i>
-  </button>
-
-  <aside id="sidebar">
+  <form id="new-job">
     <input type="url" id="url-input" placeholder="Paste a song link (Spotify, YouTube…)" required />
     <button class="primary" type="submit" id="submit-btn">Transcribe →</button>
     <input type="file" id="file-input" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm,.mp4" hidden />
@@ -2308,7 +2310,7 @@ $("#is-go").addEventListener("click", async () => {
    A small icon in the bottom-right corner; the same spot holds the restore
    icon while expanded. The transport controls and the playback settings
    gear stay available (they're part of the controls row). */
-const FS_ICON = { enter: "expand", exit: "collapse" };
+const FS_ICON = { enter: "full-screen-one", exit: "off-screen-one" };
 function setFullscreenPlayer(on) {
   document.body.classList.toggle("fs-player", on);
   setIcon($("#fs-btn"), on ? FS_ICON.exit : FS_ICON.enter);
