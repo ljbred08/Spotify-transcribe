@@ -42,6 +42,21 @@
     gap: 14px;
     height: 100vh;
   }
+  /* collapse/expand: a small thumb in the standard place (half over the
+     edge); when collapsed the sidebar itself is gone and the thumb stays
+     pinned to the screen edge to bring it back */
+  #side-toggle {
+    position: fixed; top: 14px; left: 328px; z-index: 70;
+    width: 24px; height: 48px; border: 1px solid var(--line);
+    border-radius: 10px; background: var(--panel); color: var(--muted);
+    cursor: pointer; display: grid; place-items: center;
+    transition: left .22s ease, color .15s, border-color .15s;
+  }
+  #side-toggle:hover { color: var(--text); border-color: #2f3950; }
+  #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .22s ease; }
+  body.side-collapsed #side-toggle { left: 0; border-radius: 0 10px 10px 0; }
+  body.side-collapsed #side-toggle .ip-icon { transform: rotate(180deg); }
+  body.side-collapsed #sidebar { display: none; }
   .logo { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
   .logo-mark {
     width: 34px; height: 34px; border-radius: 10px;
@@ -589,6 +604,10 @@
   /* ---------- phone / narrow ---------- */
   @media (max-width: 640px) {
     body { flex-direction: column; height: auto; min-height: 100%; }
+    /* sidebar collapse toggle: on phones the sidebar is a top block, so the
+       standard edge thumb sits at the very top and the sidebar just hides */
+    #side-toggle { top: 2px; left: auto; right: 0; width: 30px; height: 30px; }
+    body.side-collapsed #side-toggle { left: auto; }
     /* sidebar is a plain compact header at the top of the page: the WHOLE
        document scrolls as one, so controls scroll out of the way too */
     #sidebar {
@@ -649,7 +668,11 @@
     <div><h1>Refrain</h1><span>song → synced transcript</span></div>
   </div>
 
-  <form id="new-job">
+  <button id="side-toggle" type="button" title="Hide sidebar">
+    <i data-i="double-left"></i>
+  </button>
+
+  <aside id="sidebar">
     <input type="url" id="url-input" placeholder="Paste a song link (Spotify, YouTube…)" required />
     <button class="primary" type="submit" id="submit-btn">Transcribe →</button>
     <input type="file" id="file-input" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm,.mp4" hidden />
@@ -2180,6 +2203,12 @@ $("#is-go").addEventListener("click", async () => {
     $("#is-go").textContent = String(err.message || err);
     setTimeout(() => { btn.textContent = "Improve sync"; btn.disabled = false; }, 3500);
   }
+});
+
+/* ---------------- sidebar collapse ---------------- */
+$("#side-toggle").addEventListener("click", () => {
+  const collapsed = document.body.classList.toggle("side-collapsed");
+  $("#side-toggle").title = collapsed ? "Show sidebar" : "Hide sidebar";
 });
 
 /* ---------------- boot ---------------- */
