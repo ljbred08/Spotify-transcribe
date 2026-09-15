@@ -606,6 +606,31 @@
     padding: 2px 8px; border-radius: 6px; font-size: 13px;
   }
 
+  /* ---------- full-window player ----------
+     hides everything except the transport row, view settings and lyrics
+     (the waveform's canvas scales up with CSS; the karaoke sweep stays the
+     focus). A small button in the bottom-right toggles it. */
+  #fs-btn {
+    position: fixed; right: 14px; bottom: 14px; z-index: 70;
+    background: var(--panel); color: var(--muted);
+    border: 1px solid var(--line); border-radius: 999px;
+    width: 36px; height: 36px; cursor: pointer;
+    display: grid; place-items: center;
+    transition: color .15s, border-color .15s, transform .06s;
+    opacity: .55;
+  }
+  #fs-btn:hover { color: var(--text); border-color: #2f3950; opacity: 1; }
+  #fs-btn:active { transform: scale(.94); }
+  #fs-btn .ip-icon { width: 16px; height: 16px; }
+  #main:only-child { display: flex; }
+  body.fs-player #sidebar { display: none; }
+  body.fs-player #main { position: fixed; inset: 0; z-index: 80; height: 100vh; background: var(--bg); }
+  body.fs-player #hero, body.fs-player #retrans-row, body.fs-player #export-row { display: none; }
+  body.fs-player #wave-wrap { padding: 4px 44px 0; }
+  body.fs-player #waveform { height: 42px; }
+  body.fs-player #lyrics { padding-top: 18px; font-size: 27px; }
+  body.fs-player .lyric-line { font-size: 27px; }
+
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: #232a3a; border-radius: 99px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -649,6 +674,7 @@
       -webkit-tap-highlight-color: transparent;
     }
     .track-del { opacity: 1; }   /* no hover on touch */
+  #fs-btn { bottom: 10px; right: 10px; }
     #models-panel { flex: none; }
     #models-panel[open] { max-height: 55vh; overflow-y: auto; }
 
@@ -876,6 +902,9 @@
   <audio id="audio" preload="auto"></audio>
 </main>
 
+<button id="fs-btn" type="button" title="Full-window player"
+        style="display:none"><i data-i="expand"></i></button>
+
 <div id="modal-overlay">
   <div class="modal">
     <h3><i data-i="timer"></i> Improve sync</h3>
@@ -1010,7 +1039,7 @@ function renderLibrary() {
       e.stopPropagation();
       if (!confirm(`Delete "${t.title}" and its files?`)) return;
       await fetch(`/api/tracks/${t.id}`, { method: "DELETE" });
-      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; }
+      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; $("#fs-btn").style.display = "none"; }
       refreshLibrary();
     });
     hydrateIcons(card);
@@ -1214,6 +1243,7 @@ async function selectTrack(trackId) {
   currentData = await res.json();
   $("#empty").style.display = "none";
   $("#player").style.display = "flex";
+  $("#fs-btn").style.display = "";
   $("#track-title").textContent = currentData.title;
   $("#track-artist").textContent = currentData.artist || "—";
   $("#track-artist").style.opacity = currentData.artist ? "" : ".45";
@@ -2271,6 +2301,28 @@ $("#is-go").addEventListener("click", async () => {
   } catch (err) {
     $("#is-go").textContent = String(err.message || err);
     setTimeout(() => { btn.textContent = "Improve sync"; btn.disabled = false; }, 3500);
+  }
+});
+
+/* ---------------- full-window player ----------------
+   A small icon in the bottom-right corner; the same spot holds the restore
+   icon while expanded. The transport controls and the playback settings
+   gear stay available (they're part of the controls row). */
+const FS_ICON = { enter: "expand", exit: "collapse" };
+function setFullscreenPlayer(on) {
+  document.body.classList.toggle("fs-player", on);
+  setIcon($("#fs-btn"), on ? FS_ICON.exit : FS_ICON.enter);
+  $("#fs-btn").title = on ? "Exit full-window player" : "Full-window player";
+  lastManualScroll = 0;   // let auto-scroll re-center in the new layout
+  buildWaveform();        // canvas geometry changed; repaint at the new size
+}
+$("#fs-btn").addEventListener("click", () => {
+  setFullscreenPlayer(!document.body.classList.contains("fs-player"));
+});
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.body.classList.contains("fs-player")) {
+    setFullscreenPlayer(false);
   }
 });
 
