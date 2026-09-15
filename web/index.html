@@ -520,6 +520,9 @@
   .lyric-edit {
     width: 100%; background: none; border: none; outline: none;
     color: var(--text); font: inherit; letter-spacing: inherit; padding: 0;
+    /* wrap exactly like the displayed words: an unwrapping input gets cut
+       off at the viewport edge and the caret map loses its rows */
+    white-space: pre-wrap; word-break: break-word;
   }
   .lyric-edit.save-flash { color: var(--accent); }
   .inst-divider {
@@ -1162,33 +1165,50 @@ let lineNodes = [];     // lyric-line elements, index-aligned with currentData.l
 let dividerNodes = [];  // {el, lineIdx, end, nextStart} instrumental breaks
 
 /* ---- inline editing ---- */
-function _charOffsetAt(div, text, x) {
-  /* character offset in `text` nearest to viewport x, measured with a
-     hidden probe anchored where the line's words start (the line is
-     position:relative, so the probe's rect shares the click's coordinate
-     space — an off-screen probe would compare against useless coords) */
+function _charOffsetAt(div, text, x, y) {
+  /* character offset in `text` nearest to the clicked point, measured with
+     a hidden probe anchored where the line's words start (the line is
+     position:relative, so the probe's rects share the click's coordinate
+     space — an off-screen probe would compare against useless coords).
+     The probe wraps exactly like the displayed words and the same width,
+     and each candidate caret is scored against its real on-screen box
+     (x AND y) — on wrapped lines, x alone lands the caret on the wrong row */
   try {
     const probe = document.createElement("span");
-    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;top:0;";
+    probe.style.cssText =
+      "position:absolute;visibility:hidden;white-space:pre-wrap;word-break:break-word;top:0;";
+    const dr = div.getBoundingClientRect();
+    let left = 0;
     const word = div.querySelector(".word");
     if (word) {
       const cs = getComputedStyle(word);
-      probe.style.font = cs.font;
+      probe.style.font = cs.font ||
+        `${cs.fontWeight} ${cs.fontSize}/${cs.lineHeight} ${cs.fontFamily}`;
       probe.style.letterSpacing = cs.letterSpacing;
-      const wr = word.getBoundingClientRect();
-      const dr = div.getBoundingClientRect();
-      probe.style.left = `${wr.left - dr.left}px`;
-    } else {
-      probe.style.left = "0px";
+      left = word.getBoundingClientRect().left - dr.left;
     }
+    probe.style.left = `${left}px`;
+    probe.style.width = `${Math.max(0, div.clientWidth - left)}px`;
     div.appendChild(probe);
-    const rightOf = (s) => {
-      probe.textContent = s;
-      return probe.getBoundingClientRect().right;
-    };
+    probe.textContent = text || "\u200b";
+    const range = document.createRange();
     let off = 0, best = Infinity;
     for (let i = 0; i <= text.length; i++) {
-      const d = Math.abs(x - rightOf(text.slice(0, i)));
+      let r;
+      if (i < text.length) {
+        range.setStart(probe.firstChild, i);
+        range.setEnd(probe.firstChild, i + 1);
+        r = range.getBoundingClientRect();
+      } else {
+        range.selectNodeContents(probe);
+        r = range.getBoundingClientRect();
+      }
+      // caret i sits before char i (or after the last char): use the box's
+      // edge nearest the click, at the box row's vertical center
+      const cx = (i < text.length) ? r.left : r.right;
+      const cy = r.top + r.height / 2;
+      const dx = x - cx, dy = y - cy;
+      const d = dx * dx + dy * dy;
       if (d < best) { best = d; off = i; }
     }
     probe.remove();
@@ -1200,10 +1220,11 @@ function startLineEdit(idx, div, e) {
   if (div.querySelector(".lyric-edit")) return;   // already editing
   const line = currentData.lines[idx];
   if (!line) return;
+  audio.pause();   // editing always pauses the music
   // map the double-click point to a character offset BEFORE the words are
   // replaced by the input (browsers select the word on dblclick, so the
   // click's own selection is useless here)
-  const caretChar = e ? _charOffsetAt(div, line.text, e.clientX) : null;
+  const caretChar = e ? _charOffsetAt(div, line.text, e.clientX, e.clientY) : null;
   const wasActive = div.classList.contains("active");
   div.classList.add("editing");
   div.classList.remove("active");
@@ -1595,6 +1616,10 @@ $("#play-btn").addEventListener("click", () => {
 });
 audio.addEventListener("play", () => setIcon($("#play-btn"), "pause"));
 audio.addEventListener("pause", () => setIcon($("#play-btn"), "play"));
+/* editing a lyric line keeps the music paused — no play while an editor is open */
+audio.addEventListener("play", () => {
+  if (document.querySelector(".lyric-edit")) audio.pause();
+});
 $("#skip-start-btn").addEventListener("click", () => { audio.currentTime = 0; });
 $("#skip-end-btn").addEventListener("click", () => {
   audio.currentTime = Math.max(0, (audio.duration || 0) - 0.05);
