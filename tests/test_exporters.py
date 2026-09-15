@@ -46,6 +46,15 @@ def test_lrc_format():
     assert "[01:01.23]la la" in out
 
 
+def test_lrc_enhanced_word_tags():
+    lines = [Line(text="la la", start=61.234, progress=0.0,
+                  words=[Word(text="la", start=61.234, end=61.5),
+                         Word(text="la", start=61.6, end=61.9)])]
+    out = export("lrc-enhanced", "Song", "Artist", lines)
+    assert out.startswith("[ti:Song]\n[ar:Artist]")
+    assert "[01:01.23]<01:01.23>la <01:01.60>la" in out
+
+
 def test_srt_cues():
     lines = [Line(text="hi", start=0.0, progress=0.0,
                   words=[Word(text="hi", start=0.0, end=1.5)])]

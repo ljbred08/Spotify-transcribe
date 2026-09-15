@@ -271,10 +271,12 @@ def export_track(track_id: str, fmt: str = "lrc"):
         content = exporters.export(fmt, track.title, track.artist, lines)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    media = "text/plain" if fmt in ("txt", "lrc", "srt", "vtt") else "application/json"
+    media = ("text/plain" if fmt in ("txt", "lrc", "lrc-enhanced", "srt", "vtt")
+             else "application/json")
+    ext = "lrc" if fmt == "lrc-enhanced" else fmt
     return PlainTextResponse(content, media_type=media,
                              headers={"Content-Disposition":
-                                      f'attachment; filename="{track.title}.{fmt}"'})
+                                      f'attachment; filename="{track.title}.{ext}"'})
 
 
 @app.delete("/api/tracks/{track_id}")

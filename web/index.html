@@ -293,6 +293,7 @@
   #main {
     flex: 1; height: 100vh; overflow: hidden;
     display: flex; flex-direction: column;
+    position: relative;
   }
   #hero {
     padding: 34px 44px 20px;
@@ -385,7 +386,12 @@
   }
   #inst-thresh:hover { border-color: #2f3950; }
 
-  #export-row { padding: 10px 44px 0; display: flex; gap: 8px; flex-wrap: wrap; }
+  /* single expandable download button in the hero's top-right corner */
+  #export-row {
+    position: absolute; top: 18px; right: 44px; z-index: 25;
+  }
+  .pp-menu.dl-menu { min-width: 190px; }
+  .dl-menu button { display: flex; align-items: center; gap: 8px; }
 
   /* grid (not flex): every child keeps its own box — nothing can shrink-and-overlap.
      both flexible tracks are shrinkable (minmax(0,...)) so a long pill row wraps
@@ -473,8 +479,11 @@
     border: 1px solid var(--line); border-radius: 999px;
     padding: 8px 16px; font-size: 12.5px; font-weight: 600; cursor: pointer;
     transition: border-color .15s, color .15s;
+    white-space: nowrap;
   }
   .export-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .export-btn .ip-icon { width: 13px; height: 13px; }
+  .export-btn .caret { width: 10px; height: 10px; }
 
   /* ---------- lyrics ---------- */
   #player { min-height: 0; }   /* flex child: must be shrinkable or lyrics never bound */
@@ -567,7 +576,8 @@
     #hero { padding: 26px 28px 16px; gap: 16px; }
     #hero-art { width: 84px; height: 84px; font-size: 34px; }
     #hero-meta h2 { font-size: 25px; }
-    #wave-wrap, #controls, #export-row, #retrans-row, #lyrics { padding-left: 28px; padding-right: 28px; }
+    #wave-wrap, #controls, #retrans-row, #lyrics { padding-left: 28px; padding-right: 28px; }
+    #export-row { top: 14px; right: 28px; }
     .lyric-line { font-size: 22px; }
   }
 
@@ -603,7 +613,8 @@
     #main { height: auto; flex: none; overflow: visible; }
     #player { min-height: 0; }
     #lyrics { flex: none; overflow: visible; }
-    #hero, #wave-wrap, #controls, #export-row, #retrans-row { padding-left: 16px; padding-right: 16px; }
+    #hero, #wave-wrap, #controls, #retrans-row { padding-left: 16px; padding-right: 16px; }
+    #export-row { top: 10px; right: 16px; }
     #hero { padding-top: 16px; gap: 12px; }
     #hero-art { width: 56px; height: 56px; font-size: 24px; border-radius: 13px; }
     #hero-meta h2 { font-size: 20px; }
@@ -791,11 +802,17 @@
     </div>
 
     <div id="export-row">
-      <button class="export-btn" data-fmt="lrc"><i data-i="download"></i> LRC</button>
-      <button class="export-btn" data-fmt="srt"><i data-i="download"></i> SRT</button>
-      <button class="export-btn" data-fmt="vtt"><i data-i="download"></i> VTT</button>
-      <button class="export-btn" data-fmt="txt"><i data-i="download"></i> TXT</button>
-      <button class="export-btn" data-fmt="json"><i data-i="download"></i> JSON</button>
+      <div class="pp-wrap">
+        <button class="export-btn" id="dl-btn"><i data-i="download"></i> Download <i data-i="down-c" class="caret"></i></button>
+        <div class="pp-menu dl-menu" id="dl-menu">
+          <button data-fmt="lrc" title="Plain LRC: one [mm:ss.xx] tag per line"><i data-i="download"></i> LRC</button>
+          <button data-fmt="lrc-enhanced" title="Enhanced LRC (A2): word-level timing tags for karaoke players"><i data-i="download"></i> Enhanced LRC</button>
+          <button data-fmt="srt"><i data-i="download"></i> SRT</button>
+          <button data-fmt="vtt"><i data-i="download"></i> VTT</button>
+          <button data-fmt="txt"><i data-i="download"></i> TXT</button>
+          <button data-fmt="json"><i data-i="download"></i> JSON</button>
+        </div>
+      </div>
     </div>
 
     <div id="lyrics"></div>
@@ -1661,8 +1678,15 @@ speeds.forEach((s) => {
 });
 
 /* ---------------- exports ---------------- */
-document.querySelectorAll(".export-btn[data-fmt]").forEach((btn) => {
+$("#dl-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#dl-menu").classList.toggle("open");
+  $("#pp-menu").classList.remove("open");
+  $("#view-menu").classList.remove("open");
+});
+document.querySelectorAll("#dl-menu button[data-fmt]").forEach((btn) => {
   btn.addEventListener("click", () => {
+    $("#dl-menu").classList.remove("open");
     if (!currentTrack) return;
     window.location.href = `/api/tracks/${currentTrack}/export?fmt=${btn.dataset.fmt}`;
   });
@@ -2051,6 +2075,7 @@ $("#pp-btn").addEventListener("click", (e) => {
   e.stopPropagation();
   $("#pp-menu").classList.toggle("open");
   $("#view-menu").classList.remove("open");
+  $("#dl-menu").classList.remove("open");
 });
 $("#view-btn").addEventListener("click", (e) => {
   e.stopPropagation();

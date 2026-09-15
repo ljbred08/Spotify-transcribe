@@ -96,6 +96,17 @@ def to_lrc(track_title: str, track_artist: str, lines: list[Line]) -> str:
     return "\n".join(header + body) + "\n"
 
 
+def to_lrc_enhanced(track_title: str, track_artist: str, lines: list[Line]) -> str:
+    """Enhanced LRC (A2): word-level <mm:ss.xx> start tags per word."""
+    out = [f"[ti:{track_title}]", f"[ar:{track_artist}]", "[re:Refrain]"]
+    for ln in lines:
+        if not ln.words:
+            continue
+        body = "".join(f"<{_fmt_lrc_time(w.start)}>{w.text} " for w in ln.words)
+        out.append(f"[{_fmt_lrc_time(ln.start)}]{body}")
+    return "\n".join(out) + "\n"
+
+
 def to_srt(lines: list[Line]) -> str:
     out = []
     for i, line in enumerate(lines, start=1):
@@ -137,6 +148,7 @@ def export(fmt: str, track_title: str, track_artist: str,
            lines: list[Line]) -> str:
     dispatch = {
         "lrc": lambda: to_lrc(track_title, track_artist, lines),
+        "lrc-enhanced": lambda: to_lrc_enhanced(track_title, track_artist, lines),
         "srt": lambda: to_srt(lines),
         "vtt": lambda: to_vtt(lines),
         "txt": lambda: to_txt(lines),
