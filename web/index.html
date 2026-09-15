@@ -577,25 +577,19 @@
     -webkit-background-clip: text; background-clip: text;
     color: transparent;
   }
-  /* "sweep" style: one smooth gradient flows across the whole line, sized
-     and positioned by --p (0..1 progress), so sung words are filled with a
-     moving gradient front instead of per-word color flips */
+  /* "sweep" style: a green gradient front fills each word left-to-right
+     (--w = 0..1 how far into that word we are), flowing through the line
+     with the word timings. The second (white) layer keeps unsung text
+     light. Glyph colors must be transparent or they'd paint OVER the
+     clipped gradient and hide it. */
   body.hl-sweep .lyric-line.active .word {
-    color: #3d4557;
-    background: linear-gradient(90deg, var(--accent), var(--accent-2) 70%,
-                                rgba(74,222,128,.25) 100%) no-repeat;
-    background-size: calc(var(--p, 0) * 100%) 100%;
-    -webkit-background-clip: text; background-clip: text;
+    color: transparent;
+    background-image: linear-gradient(90deg, var(--accent), var(--accent-2)),
+                      linear-gradient(var(--text), var(--text));
+    background-size: calc(var(--w, 0) * 100%) 100%, 100% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text, text; background-clip: text, text;
   }
-  body.hl-sweep .lyric-line.past {
-    color: #262d3d;
-  }
-  body.hl-sweep .lyric-line.past .word {
-    color: #262d3d;
-    background: none;
-  }
-  /* default = "glow" (per-word); the sweep style ignores the word classes */
-  body.hl-glow .lyric-line.active .word { color: #3d4557; }
 
   /* ---------- empty state ----------
      visible by default: a fresh load with no track selected must show the
@@ -1567,7 +1561,6 @@ function buildLyrics() {
    mid-flight. Now the DOM is touched only when state CHANGES.             */
 let lastActive = -1;
 let lastScrollTarget = -1;
-let sweepP = -1;             // last written sweep progress (skip redundant writes)
 
 function tickLyrics() {
   if (currentData && currentData.lines.length
@@ -1586,11 +1579,12 @@ function tickLyrics() {
       const wrap = $("#lyrics");
       if (lastActive >= 0 && lineNodes[lastActive]) {
         lineNodes[lastActive].classList.remove("active");
-        lineNodes[lastActive].style.removeProperty("--p");
-        lineNodes[lastActive].querySelectorAll(".word.done, .word.singing")
-          .forEach((el) => el.classList.remove("done", "singing"));
+        lineNodes[lastActive].querySelectorAll(".word")
+          .forEach((el) => {
+            el.style.removeProperty("--w");
+            el.classList.remove("done", "singing");
+          });
       }
-      sweepP = -1;
       for (let i = 0; i < lineNodes.length; i++) {
         lineNodes[i].classList.toggle("past", active !== -1 && i < active);
         if (i === active) lineNodes[i].classList.add("active");
@@ -1609,30 +1603,19 @@ function tickLyrics() {
     }
 
     // (3) word sweep on the active line only (cheap: ~8 spans).
-    // "glow" toggles per-word classes; "sweep" sets one CSS var so a single
-    // gradient flows smoothly across the line between word boundaries.
+    // "glow" toggles per-word classes; "sweep" writes each word's sung
+    // fraction (--w) so a green gradient front flows word by word.
     if (active !== -1) {
       const node = lineNodes[active];
       if (node) {
-        const times = wordTimings[active] || [];
-        if (highlightStyle === "sweep") {
-          let p = 0;
-          for (let wi = 0; wi < times.length; wi++) {
-            const [ws, we] = times[wi];
-            if (t >= we) p = (wi + 1) / times.length;      // fully sung
-            else if (t >= ws) {                             // inside the word
-              p = (wi + Math.min(1, (t - ws) / Math.max(0.001, we - ws)))
-                  / times.length;
-              break;
-            } else break;
-          }
-          if (Math.abs(p - sweepP) > 0.001) {
-            sweepP = p;
-            node.style.setProperty("--p", p.toFixed(3));
-          }
-        } else {
-          for (const span of node.querySelectorAll(".word")) {
-            const ws = +span.dataset.start, we = +span.dataset.end;
+        for (const span of node.querySelectorAll(".word")) {
+          const ws = +span.dataset.start, we = +span.dataset.end;
+          if (highlightStyle === "sweep") {
+            const f = t >= we ? 1
+              : t >= ws ? Math.min(1, (t - ws) / Math.max(0.001, we - ws))
+              : 0;
+            span.style.setProperty("--w", f.toFixed(3));
+          } else {
             span.classList.toggle("done", t >= we);
             span.classList.toggle("singing", t >= ws && t < we);
           }
