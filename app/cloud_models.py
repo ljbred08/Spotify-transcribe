@@ -10,8 +10,14 @@ Structure mirrors the UI:
 Two transcription paths:
 1. audio_llm — an omni model (Gemini, OpenRouter audio models) listens to the
    audio and returns fully formatted, synced lyric lines. No formatter needed.
-2. transcribe — a transcription-only model (Whisper) returns word timestamps;
-   a separate LLM (block 2 of the UI) formats them afterwards.
+2. transcribe — a transcription-only model returns measured word timestamps;
+   a separate LLM (block 2 of the UI) formats them afterwards. These carry
+   an stt_flavor selecting the API shape: "" = OpenAI multipart
+   /audio/transcriptions (Groq, OpenAI), "openrouter_stt" = OpenRouter's
+   JSON /audio/transcriptions endpoint, "gemini_interactions" = Google's
+   Interactions API (gemini-3.5-transcribe). stt_audio_format optionally
+   overrides the upload format ("" = m4a for OpenRouter, native bytes
+   otherwise) for upstreams that reject m4a outright (MAI-Transcribe 2).
 
 Model ids are "<provider>:<api_model>"; api_model is the exact string the
 provider's API expects (e.g. "google/gemini-flash-latest" on OpenRouter,
@@ -55,10 +61,15 @@ class CloudModel:
     key_env: str       # env var holding the API key ("" for local)
     notes: str
     api_model: str     # exact model string for the provider's API
+    stt_flavor: str = ""  # transcribe-only API shape (see module docstring)
+    stt_audio_format: str = ""  # transcribe-only upload format override
 
 
-# (api_model, display name, kind, notes) per provider — transcription block.
-TRANSCRIBE_MODELS: dict[str, list[tuple[str, str, str, str]]] = {
+# (api_model, display name, kind, notes[, stt_flavor]) — transcription block.
+# Only models that can return word-level timestamps are listed: the karaoke
+# player is built on per-word sweep, so plain-text STT endpoints are useless
+# here and deliberately excluded.
+TRANSCRIBE_MODELS: dict[str, list[tuple]] = {
     "gemini": [
         ("gemini-flash-latest", "Gemini Flash (latest)", "audio_llm",
          "Routes to the newest production Gemini Flash; listens + formats in one step"),
@@ -66,6 +77,9 @@ TRANSCRIBE_MODELS: dict[str, list[tuple[str, str, str, str]]] = {
          "Routes to the newest production Gemini Pro; highest quality, slower"),
         ("gemini-flash-lite-latest", "Gemini Flash Lite (latest)", "audio_llm",
          "Lightweight/fast Gemini Flash Lite; listens + formats in one step"),
+        ("gemini-3.5-transcribe", "Gemini 3.5 Transcribe", "transcribe",
+         "Google's dedicated ASR model; measured word timings; needs a "
+         "formatter LLM (block 2)", "gemini_interactions"),
     ],
     "openrouter": [
         ("~google/gemini-flash-latest", "Gemini Flash (latest)", "audio_llm",
@@ -92,6 +106,40 @@ TRANSCRIBE_MODELS: dict[str, list[tuple[str, str, str, str]]] = {
          "Lightweight NVIDIA omni model (free tier, reasoning)"),
         ("xiaomi/mimo-v2.5", "MiMo v2.5", "audio_llm",
          "Xiaomi open-weights omni model"),
+        # --- transcription-only models via OpenRouter's STT endpoint ---
+        # (every entry probe-verified on 2026-09-14: honors verbose_json AND
+        # returns words for sung/music audio, which is the whole point here)
+        ("microsoft/mai-transcribe-2", "MAI-Transcribe 2", "transcribe",
+         "Microsoft's multilingual ASR (top of FLEURS); measured word "
+         "timings; needs a formatter LLM (block 2)", "openrouter_stt",
+         "mp3"),  # upstream 400s on m4a; everything else takes m4a
+
+        ("qwen/qwen3-asr-0.6b", "Qwen3 ASR 0.6B", "transcribe",
+         "Tiny open-weights ASR, near-free; measured word timings; needs a "
+         "formatter LLM (block 2)", "openrouter_stt"),
+        ("fish-audio/transcribe-1", "Fish Audio Transcribe 1", "transcribe",
+         "Fish Audio ASR with language auto-detect; measured word timings; "
+         "needs a formatter LLM (block 2)", "openrouter_stt"),
+        ("openai/whisper-large-v3", "Whisper large v3 (via OpenRouter)", "transcribe",
+         "Whisper billed through OpenRouter; measured word timings; needs a "
+         "formatter LLM (block 2)", "openrouter_stt"),
+        ("openai/whisper-large-v3-turbo", "Whisper large v3 turbo (via OpenRouter)", "transcribe",
+         "Faster/cheaper Whisper billed through OpenRouter; measured word "
+         "timings; needs a formatter LLM (block 2)", "openrouter_stt"),
+        # deliberately NOT listed (no word timings for songs -> can't drive
+        # the karaoke sweep; all probe-verified 2026-09-14):
+        # - meta/muse-voice-transcribe-1.0: Meta-hosted only, plain text out
+        # - mistralai/voxtral-small-24b-2507-stt, mistralai/voxtral-mini-transcribe,
+        #   qwen/qwen3-asr-flash-2026-02-10: upstream rejects verbose_json
+        #   ("does not support response_format verbose_json. Use json") -> text
+        #   only via OpenRouter. Native Mistral/Alibaba APIs do have word
+        #   timestamps — re-add if direct provider support is ever added.
+        # - deepgram/nova-3, x-ai/grok-stt-1.0: SPEECH-ONLY upstreams — they
+        #   transcribe spoken audio perfectly (59s TTS clip -> 168 timed words)
+        #   but return an empty 200 (no words, no text) for sung/music audio,
+        #   even a 30 s slice. Not length-related; chunking can't help.
+        # - openai/gpt-4o-transcribe[-mini] via OpenRouter: same verbose_json
+        #   rejection; use the native openai provider rows below instead.
     ],
     "groq": [
         ("whisper-large-v3", "Whisper large v3", "transcribe",
@@ -117,8 +165,10 @@ FORMATTER_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gemini-pro-latest", "Gemini Pro (latest)"),
         ("gemini-flash-lite-latest", "Gemini Flash Lite (latest)"),
     ],
-    # the omni list doubles as text formatters (they all output text)
-    "openrouter": [(m[0], m[1]) for m in TRANSCRIBE_MODELS["openrouter"]],
+    # the omni list doubles as text formatters (they all output text);
+    # transcription-only STT models are excluded (no chat surface)
+    "openrouter": [(m[0], m[1]) for m in TRANSCRIBE_MODELS["openrouter"]
+                   if m[2] == "audio_llm"],
     "groq": [
         ("llama-3.3-70b-versatile", "Llama 3.3 70B"),
         ("llama-3.1-8b-instant", "Llama 3.1 8B (fast)"),
@@ -141,11 +191,14 @@ _DEFAULT_FORMATTER_MODEL = {
 def _catalog() -> list[CloudModel]:
     out: list[CloudModel] = []
     for pid, models in TRANSCRIBE_MODELS.items():
-        for api_model, name, kind, notes in models:
+        for entry in models:
+            api_model, name, kind, notes = entry[:4]
             out.append(CloudModel(
                 id=f"{pid}:{api_model}", name=name, provider=pid, kind=kind,
                 key_env=PROVIDERS[pid].key_env or "", notes=notes,
-                api_model=api_model))
+                api_model=api_model,
+                stt_flavor=entry[4] if len(entry) > 4 else "",
+                stt_audio_format=entry[5] if len(entry) > 5 else ""))
     return out
 
 
@@ -164,6 +217,17 @@ _MIGRATE = {
     "openrouter:thinking-machines/inkling-small": "openrouter:thinkingmachines/inkling-small",
     "openrouter:nvidia/nemotron-3-nano-omni":
         "openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+    # STT slugs retired from the catalog on 2026-09-14 (verified: no word
+    # timestamps for songs — verbose_json rejection or speech-only upstreams);
+    # remount onto a verified transcriber so saved settings keep working
+    "openrouter:mistralai/voxtral-small-24b-2507-stt":
+        "openrouter:openai/whisper-large-v3-turbo",
+    "openrouter:mistralai/voxtral-mini-transcribe":
+        "openrouter:openai/whisper-large-v3-turbo",
+    "openrouter:qwen/qwen3-asr-flash-2026-02-10":
+        "openrouter:openai/whisper-large-v3-turbo",
+    "openrouter:deepgram/nova-3": "openrouter:openai/whisper-large-v3-turbo",
+    "openrouter:x-ai/grok-stt-1.0": "openrouter:openai/whisper-large-v3-turbo",
 }
 
 
@@ -201,12 +265,20 @@ def key_source(provider: str) -> str:
     return "env" if os.environ.get(info.key_env, "").strip() else ""
 
 
+def group_label(kind: str) -> str:
+    """Dropdown section header for a model kind (see the web combo box)."""
+    if kind == "audio_llm":
+        return "Audio LLM · listens + formats in one step"
+    return "Transcriber · measured word timings"
+
+
 def list_models() -> list[dict]:
-    """Catalog for the UI: availability + display fields."""
+    """Catalog for the UI: availability + display fields + dropdown group."""
     out = []
     for m in CATALOG:
         d = asdict(m)
         d["available"] = bool(provider_key(m.provider))
+        d["group"] = group_label(m.kind)
         out.append(d)
     return out
 

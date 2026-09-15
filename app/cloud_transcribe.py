@@ -1,7 +1,8 @@
 """Cloud transcription + audio-LLM backends.
 
 Two families:
-- TranscriptProvider (whisper-style /audio/transcriptions APIs): returns words
+- Transcription-only backends (whisper-style /audio/transcriptions APIs,
+  OpenRouter's JSON STT endpoint, Gemini's Interactions API): return words
   with timestamps; formatting happens later (block 2 of the UI).
 - AudioLLM (Gemini, OpenRouter omni models): listens to the audio and returns
   fully formatted lyric lines WITH word-level timings in one call — no
@@ -39,6 +40,40 @@ def _provider_base_url(provider: str) -> str:
     return "https://api.openai.com/v1"
 
 
+def _stt_result_from_payload(model: CloudModel, payload: dict) -> TranscriptionResult:
+    """Shape any OpenAI-compatible verbose_json STT reply into our result.
+
+    Accepts both key styles — plain objects ({word,start,end}) and OpenRouter
+    STT payloads that may nest words under extra keys — plus Deepgram-style
+    {punctuated_word,start,end}. Words without valid finite timings are
+    dropped so the karaoke sweep never stutters on garbage.
+    """
+    words: list[dict] = []
+    for w in payload.get("words") or []:
+        if not isinstance(w, dict):
+            continue
+        text = str(w.get("word") or w.get("text") or "").strip()
+        try:
+            s = float(w.get("start", 0.0))
+            e = float(w.get("end", w.get("start", 0.0)))
+        except (TypeError, ValueError):
+            continue
+        if not text or not (s >= 0) or e < s:
+            continue
+        words.append({"text": text, "start": s, "end": e})
+    segments = [
+        Segment(text=s.get("text", "").strip(), start=float(s.get("start", 0.0)),
+                end=float(s.get("end", 0.0)))
+        for s in payload.get("segments") or []
+        if isinstance(s, dict)
+    ]
+    if not words:
+        words = _words_from_segments(segments)
+    if not words:
+        raise TranscribeError(f"{model.name} returned no timed words")
+    return TranscriptionResult(segments=segments, words=words, backend=model.id)
+
+
 class TranscriptProvider:
     """Whisper-style HTTP APIs (Groq, OpenAI). Word timestamps when available."""
 
@@ -73,23 +108,161 @@ class TranscriptProvider:
         if resp.status_code != 200:
             raise TranscribeError(
                 f"{self.m.provider} error {resp.status_code}: {resp.text[:300]}")
-        payload = resp.json()
-        words = [
-            {"text": w.get("word", "").strip(), "start": float(w.get("start", 0.0)),
-             "end": float(w.get("end", 0.0))}
-            for w in payload.get("words", []) if w.get("word", "").strip()
-        ]
-        segments = [
-            Segment(text=s.get("text", "").strip(), start=float(s.get("start", 0.0)),
-                    end=float(s.get("end", 0.0)))
-            for s in payload.get("segments", [])
-        ]
-        if not words and segments:
-            words = _words_from_segments(segments)
+        return _stt_result_from_payload(self.m, resp.json())
+
+def _ffmpeg_convert(audio_path: Path, fmt: str) -> Path:
+    """ffmpeg the audio into the container an upstream STT insists on.
+
+    Used only for models whose upstream rejects the app's m4a outright
+    (bare "Provider returned 400"). 16 kHz mono keeps the payload small;
+    every affected model is a Whisper-class ASR that resamples internally
+    anyway.
+    """
+    out = Path(tempfile.gettempdir()) / f"refrain_{audio_path.stem}_stt.{fmt}"
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-v", "error", "-i", str(audio_path),
+         "-ac", "1", "-ar", "16000", "-b:a", "64k", str(out)],
+        capture_output=True, text=True)
+    if proc.returncode != 0 or not out.exists():
+        raise TranscribeError(f"ffmpeg failed to convert audio to {fmt}")
+    return out
+
+
+class OpenRouterSTT:
+    """Transcription-only models via OpenRouter's JSON /audio/transcriptions.
+
+    The endpoint takes base64 audio (raw bytes, not a data URI) and speaks
+    OpenAI's verbose_json dialect: response_format "verbose_json" plus
+    timestamp_granularities ["word"] yields a words array with per-word
+    start/end. Providers without structured output reject verbose_json with
+    a 400 — those models are kept out of the catalog on purpose.
+
+    Singing quirk (probed 2026-09-14): deepgram/nova-3 and x-ai/grok-stt-1.0
+    transcribe spoken audio flawlessly (59 s of TTS speech -> 168 words with
+    exact timings) but return an EMPTY transcript (HTTP 200, no words, no
+    text) for sung/music audio — even a 30 s song slice. Speech-only models,
+    useless for this app; they are excluded from the catalog rather than
+    worked around (chunking does not help:    a 30 s music chunk is empty too).
+    """
+
+    def __init__(self, model: CloudModel) -> None:
+        self.m = model
+        self.name = model.id
+
+    def available(self) -> bool:
+        return bool(provider_key(self.m.provider))
+
+    def transcribe(self, audio_path: Path, progress, *,
+                   title: str = "", artist: str = "") -> TranscriptionResult:
+        key = provider_key(self.m.provider)
+        if not key:
+            raise TranscribeError("OpenRouter API key missing")
+        fmt = self.m.stt_audio_format or "m4a"
+        upload = audio_path
+        if fmt != "m4a":
+            # upstream rejects m4a outright (MAI-Transcribe 2 400s on it);
+            # convert to the format its catalog entry demands
+            progress(f"Converting audio to {fmt} for {self.m.name}…")
+            upload = _ffmpeg_convert(audio_path, fmt)
+        try:
+            progress(f"Uploading audio to OpenRouter ({self.m.name})…")
+            b64 = base64.b64encode(upload.read_bytes()).decode("ascii")
+            body = {
+                "model": self.m.api_model,
+                "input_audio": {"data": b64, "format": fmt},
+                "response_format": "verbose_json",
+                "timestamp_granularities": ["segment", "word"],
+            }
+            progress(f"{self.m.name} is transcribing…")
+            resp = _post_with_retries(
+                lambda: httpx.post(
+                    "https://openrouter.ai/api/v1/audio/transcriptions",
+                    headers={"Authorization": f"Bearer {key}"},
+                    json=body, timeout=900.0),
+                progress, "OpenRouter")
+        finally:
+            if upload is not audio_path:
+                upload.unlink(missing_ok=True)
+        if resp.status_code != 200:
+            raise TranscribeError(
+                f"OpenRouter error {resp.status_code}: {resp.text[:300]}")
+        return _stt_result_from_payload(self.m, resp.json())
+
+
+class GeminiTranscribe:
+    """gemini-3.5-transcribe via Google's Interactions API.
+
+    The dedicated ASR model returns measured word offsets as word_info
+    annotations on the response content ("0.100s"-style strings). Audio is
+    inlined base64: Interactions input items carry {type, data, mime_type}
+    directly (NOT the generateContent-style inline_data nesting — that is
+    rejected with "Unknown parameter 'inline_data' at 'input[0]'").
+    """
+
+    def __init__(self, model: CloudModel) -> None:
+        self.m = model
+        self.name = model.id
+
+    def available(self) -> bool:
+        return bool(provider_key(self.m.provider))
+
+    def transcribe(self, audio_path: Path, progress, *,
+                   title: str = "", artist: str = "") -> TranscriptionResult:
+        key = provider_key(self.m.provider)
+        if not key:
+            raise TranscribeError("Gemini API key missing")
+        progress(f"Uploading audio to Gemini ({self.m.api_model})…")
+        import mimetypes
+        mime = mimetypes.guess_type(audio_path.name)[0] or "audio/mp4"
+        b64 = base64.b64encode(audio_path.read_bytes()).decode("ascii")
+        body = {
+            "model": self.m.api_model,
+            "input": [{"type": "audio", "data": b64, "mime_type": mime}],
+            "generation_config": {"transcription_config": {
+                "mode": {"type": "verbatim",
+                         "timestamp_granularities": ["word"]},
+            }},
+        }
+        progress(f"{self.m.name} is transcribing…")
+        url = "https://generativelanguage.googleapis.com/v1beta/interactions"
+        resp = _post_with_retries(
+            lambda: httpx.post(url, headers={"x-goog-api-key": key},
+                               json=body, timeout=900.0),
+            progress, "Gemini")
+        if resp.status_code != 200:
+            raise TranscribeError(
+                f"Gemini error {resp.status_code}: {resp.text[:300]}")
+        try:
+            steps = resp.json().get("steps") or []
+        except ValueError as exc:
+            raise TranscribeError("Gemini returned no JSON body") from exc
+
+        def _offset(raw) -> float:
+            # "12.3s" | "12.3" | "12s 300ms" -> seconds
+            m = re.match(r"\s*(\d+(?:\.\d+)?)s?(?:\s*(\d+)ms)?", str(raw or ""))
+            if not m:
+                return -1.0
+            sec = float(m.group(1))
+            if m.group(2):
+                sec += int(m.group(2)) / 1000.0
+            return sec
+
+        words: list[dict] = []
+        for step in steps:
+            for content in (step or {}).get("content") or []:
+                for ann in (content or {}).get("annotations") or []:
+                    if not isinstance(ann, dict) or ann.get("type") != "word_info":
+                        continue
+                    text = str(ann.get("text", "")).strip()
+                    s, e = _offset(ann.get("start_offset")), _offset(ann.get("end_offset"))
+                    if text and s >= 0 and e >= s:
+                        words.append({"text": text, "start": s, "end": e})
         if not words:
-            raise TranscribeError(f"{self.m.name} returned no words")
-        return TranscriptionResult(segments=segments, words=words,
-                                   backend=self.m.id)
+            raise TranscribeError(
+                f"{self.m.name} returned no word timestamps (got "
+                f"{str(resp.json())[:200]})")
+        words.sort(key=lambda w: (w["start"], w["end"]))
+        return TranscriptionResult(segments=[], words=words, backend=self.m.id)
 
 
 # --- path 1: audio LLMs ---------------------------------------------------------
@@ -409,6 +582,10 @@ def build(model_id: str):
     if m is None:
         return None
     if m.kind == "transcribe":
+        if m.stt_flavor == "openrouter_stt":
+            return OpenRouterSTT(m)
+        if m.stt_flavor == "gemini_interactions":
+            return GeminiTranscribe(m)
         return TranscriptProvider(m)
     if m.provider == "gemini":
         return GeminiAudio(m)
@@ -437,5 +614,5 @@ def pick(model_id: str | None = None):
         if backend is not None and backend.available():
             return backend, m.name
     return None, ("No cloud transcription available — set an API key in the "
-                  "models panel (or GEMINI_API_KEY / OPENROUTER_API_KEY / "
-                  "GROQ_API_KEY / OPENAI_API_KEY in the environment)")
+                  "models panel (or GEMINI_API_KEY / OPENROUTER_API_KEY in "
+                  "the environment)")

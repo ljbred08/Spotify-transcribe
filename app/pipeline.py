@@ -41,8 +41,9 @@ class Pipeline:
             t.start()
             self._threads.append(t)
 
-    def submit(self, url: str) -> Job:
-        job = self.store.create_job(url)
+    def submit(self, url: str, *, kind: str = "download",
+               track_id: str | None = None) -> Job:
+        job = self.store.create_job(url, kind=kind, track_id=track_id)
         return job
 
     def _worker_loop(self) -> None:
@@ -61,6 +62,10 @@ class Pipeline:
                 return
             if job.kind == "improve_sync":
                 self._run_improve_sync(job)
+                return
+            if job.kind == "upload":
+                # audio already on disk (uploaded file); transcribe it directly
+                self._run_upload(job)
                 return
             self._progress(job, JobStatus.DOWNLOADING, "Resolving track…")
             self._check_canceled(job)
@@ -202,6 +207,21 @@ class Pipeline:
                 llm_note += f" ({fr.fallback_lines} auto)"
         return result, lines, llm_note
 
+    def _run_upload(self, job: Job) -> None:
+        """Transcribe an uploaded file — audio exists, no download stage."""
+        track = self.store.get_track(job.track_id or "")
+        if not track or not track.audio_file or not track.audio_file.exists():
+            raise transcribe.TranscribeError("Uploaded audio is missing")
+        self._progress(job, JobStatus.TRANSCRIBING, "Reading uploaded audio…")
+        self._check_canceled(job)
+        result, lines, llm_note = self._run_transcribe_with_timeout(
+            job, track.audio_file, title=track.title, artist=track.artist)
+        version = self.store.save_transcript(track.id, lines,
+                                             backend=result.backend)
+        self.store.update_job(job.id, status=JobStatus.DONE,
+                              message=f"Done via {result.backend} · "
+                                      f"{len(lines)} lines{llm_note} · v{version}")
+
     def _run_retranscribe(self, job: Job) -> None:
         """Re-run transcription on a track's existing audio as a new version."""
         track = self.store.get_track(job.track_id or "")
@@ -246,8 +266,13 @@ class Pipeline:
         self._progress(job, JobStatus.ALIGNING,
                        "Aligning reference timings to the current lyrics…")
         new_lines, stats = improve_sync(current, result.words)
+        # match accuracy: fraction of the transcript's words the reference
+        # transcription found (fuzzy >= 0.5). Higher = the two models agreed,
+        # so the retimed timings are trustworthy; low = reference misheard a
+        # lot and timings may be worse than before.
+        pct = round(stats["coverage"] * 100)
         note = (f"sync improved via {result.backend} "
-                f"({stats['matched']}/{stats['old_words']} matched, "
+                f"({pct}% match · {stats['matched']}/{stats['old_words']} matched, "
                 f"{stats['forced']} forced, {stats['kept']} kept, "
                 f"{stats['dropped']} dropped)")
         # the words/lines still come from the active transcript's model —
@@ -258,12 +283,13 @@ class Pipeline:
                          if v["version"] == idx.get("active")), None)
         backend_label = (active_v or {}).get("backend") or result.backend
         version = self.store.save_transcript(track.id, new_lines,
-                                             backend=backend_label, note=note)
+                                             backend=backend_label, note=note,
+                                             match=pct)
         self.store.update_job(
             job.id, status=JobStatus.DONE,
             message=f"Sync improved · {stats['matched']}/{stats['old_words']} "
-                    f"words retimed ({stats['kept']} kept, "
-                    f"{stats['dropped']} dropped) · v{version}")
+                    f"words retimed · {pct}% match "
+                    f"({stats['kept']} kept, {stats['dropped']} dropped) · v{version}")
 
     def _progress(self, job: Job, status: JobStatus, message: str) -> None:
         self.store.update_job(job.id, status=status, message=message)

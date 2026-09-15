@@ -221,6 +221,20 @@ class Store:
             self._save()
         return existed
 
+    def update_track(self, track_id: str, *, title: str | None = None,
+                     artist: str | None = None) -> Track | None:
+        """Patch editable metadata (title/artist); None leaves a field as-is."""
+        with self._lock:
+            track = self._tracks.get(track_id)
+            if track is None:
+                return None
+            if title is not None:
+                track.title = title
+            if artist is not None:
+                track.artist = artist
+            self._save()
+            return track
+
     # -- transcript persistence (versioned) ----------------------------------
     def _transcript_dir(self, track_id: str) -> Path:
         return cfg.DATA_DIR / "transcripts" / track_id
@@ -265,21 +279,26 @@ class Store:
 
     def save_transcript(self, track_id: str, lines: list[Line],
                         *, backend: str | None = None,
-                        note: str | None = None) -> int:
+                        note: str | None = None,
+                        match: int | None = None) -> int:
         """Persist lines as a new version; it becomes the active one.
 
         Returns the version number. Previous versions are kept so a bad
-        re-run can always be rolled back.
+        re-run can always be rolled back. `match` is the improve-sync match
+        accuracy (0-100); stored on the version so several resyncs can be
+        compared at a glance in the UI.
         """
         # the index read-modify-write must not interleave with an activate()
         # from an endpoint thread or another job's save
         with self._lock:
             return self._save_transcript_locked(track_id, lines,
-                                                backend=backend, note=note)
+                                                backend=backend, note=note,
+                                                match=match)
 
     def _save_transcript_locked(self, track_id: str, lines: list[Line],
                                 *, backend: str | None,
-                                note: str | None) -> int:
+                                note: str | None,
+                                match: int | None = None) -> int:
         # Canonical storage is Enhanced LRC text (word-level tags) so the
         # format we get from audio LLMs is exactly what we keep; it is
         # re-parsed on every load, so parser improvements apply to every
@@ -298,6 +317,7 @@ class Store:
         index["versions"].append({
             "version": version, "createdAt": time.time(), "backend": backend,
             "lines": len(lines), "note": note, "fmt": "lrc",
+            **({"match": match} if match is not None else {}),
         })
         index["active"] = version
         self._write_versions_index(track_id, index)

@@ -52,6 +52,30 @@ def test_missing_word_keeps_old_timing():
     assert st["kept"] == 1 and st["matched"] == 4
 
 
+def test_match_percent_reports_reference_agreement():
+    """stats carry a 0-100 match accuracy = matched / old words, so the UI
+    can show how closely the reference transcription agreed ("We" pairs with
+    "We're" at sim 0.5 -> counts as matched)."""
+    good = [line("We're no strangers to love", 10.0,
+                 [("We're", 10.0, 10.5), ("no", 10.5, 10.8),
+                  ("strangers", 10.8, 11.6), ("to", 11.6, 11.8),
+                  ("love", 11.8, 12.4)])]
+    _, st = improve_sync(good, ref(
+        ("We", 9.9, 10.4), ("strangers", 10.9, 11.7), ("to", 11.7, 11.9),
+        ("love", 11.9, 12.5)))
+    assert st["matched"] == 4 and st["forced"] == 0
+    assert st["coverage"] == round(4 / 5, 3)
+    assert round(st["coverage"] * 100) == 80
+    # forced (misheard) pairs do NOT count toward the match percentage
+    _, st2 = improve_sync(
+        [line("and so do I", 0.0, [("and", 0.0, 0.3), ("so", 0.3, 0.6),
+                                    ("do", 0.6, 0.8), ("I", 0.8, 1.0)])],
+        ref(("and", 0.0, 0.3), ("but", 0.3, 0.6), ("do", 0.6, 0.8),
+            ("I", 0.8, 1.0)))
+    assert st2["forced"] == 1 and st2["matched"] == 3
+    assert round(st2["coverage"] * 100) == 75
+
+
 def test_stale_missed_word_is_interpolated():
     """ref misses a word whose old timestamp no longer fits the retimed
     neighbourhood — it is interpolated between the anchors instead."""

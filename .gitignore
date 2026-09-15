@@ -13,6 +13,8 @@ dist/
 # App data (downloaded audio, transcripts)
 data/
 .pytest-data/
+.test-cancel-data/
+.test-cancel-settings/
 server.log
 
 # Secrets

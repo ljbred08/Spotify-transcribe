@@ -48,6 +48,24 @@
     background: conic-gradient(from 210deg, var(--accent), #0ea5e9, var(--accent));
     display: grid; place-items: center; font-size: 18px;
   }
+  /* IconPark inline icons (via vendored Iconify data) */
+  i[data-i], .ip-icon { display: inline-flex; }
+  .ip-icon { width: 1em; height: 1em; vertical-align: -0.125em; fill: none;
+    stroke: currentColor; stroke-width: 4; }
+  i[data-i] { font-style: normal; line-height: 1; }
+  #logo-mark .ip-icon, .logo-mark .ip-icon { width: 18px; height: 18px; color: #fff; }
+  #hero-art .ip-icon { width: 44px; height: 44px; color: var(--accent); }
+  #empty .big .ip-icon { width: 64px; height: 64px; color: var(--muted); }
+  .track-art .ip-icon { width: 18px; height: 18px; color: var(--muted); }
+  .ctrl-btn .ip-icon { width: 18px; height: 18px; }
+  #play-btn .ip-icon { width: 20px; height: 20px; }
+  .export-btn .ip-icon, .text-btn .ip-icon, #pp-improve-sync .ip-icon,
+  #pp-btn .ip-icon { width: 13px; height: 13px; }
+  .export-btn .caret, #pp-btn .caret { width: 10px; height: 10px; }
+  .speed-btn .ip-icon { width: 14px; height: 14px; }
+  .track-del .ip-icon { width: 14px; height: 14px; }
+  summary .ip-icon { width: 13px; height: 13px; vertical-align: -1.5px; }
+  .job-stop .ip-icon { width: 11px; height: 11px; }
   .logo h1 { font-size: 18px; font-weight: 800; letter-spacing: -0.02em; }
   .logo span { color: var(--muted); font-weight: 500; font-size: 12px; display: block; }
 
@@ -171,6 +189,50 @@
     padding: 6px 8px; font-size: 12.5px; outline: none; min-width: 0;
   }
   .backend-row input[type="text"]:focus { border-color: #2f3950; }
+  .backend-row input[type="password"] {
+    flex: 1; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 8px; font-size: 12.5px; outline: none; min-width: 0;
+  }
+
+  /* ---------- grouped combo box ----------
+     A real <select> can't show section headers (optgroup styling is not
+     cross-browser), so the model picker is a button + popover listbox with
+     disabled header rows. The hidden native <select> keeps the value and
+     the existing change handlers. */
+  .combo { position: relative; flex: 1; min-width: 0; }
+  .combo-btn {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px;
+    padding: 6px 8px; font-size: 12.5px; cursor: pointer; text-align: left;
+  }
+  .combo-btn:hover { border-color: #2f3950; }
+  .combo-btn:focus-visible { outline: none; border-color: var(--accent); }
+  .combo-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .combo-caret { color: var(--muted); font-size: 10px; flex: none; }
+  .combo-pop {
+    display: none; position: absolute; left: 0; right: 0; top: calc(100% + 4px);
+    z-index: 60; max-height: 300px; overflow-y: auto;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: 0 12px 32px rgba(0,0,0,.5); padding: 4px;
+  }
+  .combo.open .combo-pop { display: block; }
+  .combo-head {
+    position: sticky; top: 0; background: var(--panel-2);
+    color: var(--muted); font-size: 10px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .1em;
+    padding: 7px 8px 5px; cursor: default;
+  }
+  .combo-opt {
+    display: block; width: 100%; text-align: left; background: none;
+    border: none; color: var(--text); border-radius: 7px;
+    padding: 6px 8px; font-size: 12.5px; cursor: pointer;
+  }
+  .combo-opt:hover { background: rgba(30,215,96,.1); }
+  .combo-opt.selected { color: var(--accent); }
+  .combo-opt:disabled { color: var(--muted); opacity: .45; cursor: default; }
+  .combo-opt:disabled:hover { background: none; }
   .adv-block { border-top: 1px solid var(--line); margin-top: 8px; }
   .adv-block summary {
     cursor: pointer; padding: 10px 12px; color: var(--muted);
@@ -247,6 +309,15 @@
   }
   #hero-meta h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }
   #hero-meta p { color: var(--muted); margin-top: 4px; }
+  /* inline editing: double-click the title/artist to edit in place */
+  #track-title.editing, #track-artist.editing { display: none; }
+  .meta-input {
+    display: none; background: var(--panel-2); border: 1px solid rgba(30,215,96,.45);
+    color: var(--text); border-radius: 8px; padding: 4px 8px;
+    font: inherit; outline: none; width: 100%;
+  }
+  .meta-input.visible { display: block; }
+  #track-artist + .meta-input { margin-top: 4px; }
   #hero-badges { display: flex; gap: 8px; margin-top: 12px; }
   .badge {
     font-size: 11px; font-weight: 600;
@@ -298,12 +369,21 @@
     border-radius: 8px; padding: 6px 9px; font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .speed-btn.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
-  #inst-thresh {
-    background: none; border: 1px solid var(--line); color: var(--muted);
-    border-radius: 8px; padding: 6px 6px; font-size: 12px; font-weight: 600;
-    cursor: pointer; margin-left: 10px;
+  /* view-options gear + dropdown in the controls row (same pattern as pp-menu) */
+  .view-wrap { margin-left: 10px; }
+  .view-menu { min-width: 250px; padding: 6px 0; }
+  .view-opt {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 9px 12px; font-size: 12.5px; color: var(--text); cursor: pointer;
   }
-  #inst-thresh:hover { color: var(--text); border-color: #2f3950; }
+  .view-opt:hover { background: rgba(30,215,96,.08); }
+  .view-opt input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+  #inst-thresh {
+    background: var(--panel); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 4px 6px; font-size: 12px; font-weight: 600;
+    cursor: pointer; margin-left: auto;
+  }
+  #inst-thresh:hover { border-color: #2f3950; }
 
   #export-row { padding: 10px 44px 0; display: flex; gap: 8px; flex-wrap: wrap; }
 
@@ -350,6 +430,11 @@
   select.ver-select:hover { filter: brightness(1.2); }
   select.ver-select option { color: var(--text); background: var(--panel-2); }
   .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
+  /* match-accuracy badge on sync-improved pills: green = high agreement
+     with the reference transcription, amber = suspiciously low */
+  .match-badge { font-weight: 700; }
+  .match-badge.good { color: var(--accent); }
+  .match-badge.low { color: #fbbf24; }
 
   /* ---------- post-processing ---------- */
   #post-row { display: flex; justify-content: flex-end; padding: 0 44px 8px; }
@@ -404,6 +489,7 @@
     -webkit-mask-image: linear-gradient(to bottom, transparent 0, black 7%, black 88%, transparent 100%);
   }
   .lyric-line {
+    position: relative;      /* anchors the optional right-aligned timestamp */
     font-size: 25px; font-weight: 700; letter-spacing: -0.02em;
     color: #3d4557;
     padding: 9px 0;
@@ -419,6 +505,24 @@
     transform: scale(1.02);
   }
   .lyric-line .word { transition: none; } /* color transitions flash against the instantly-appearing singing gradient */
+  /* optional per-line timestamps (settings toggle): right-aligned mm:ss,
+     click = copy. body.ts-on is set by the same toggle. */
+  body.ts-on .lyric-line { padding-right: 56px; }
+  .lyric-ts {
+    position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+    font-size: 11px; font-weight: 600; letter-spacing: .02em;
+    color: var(--muted); opacity: .55; cursor: copy; user-select: none;
+    transition: opacity .15s, color .15s;
+  }
+  .lyric-ts:hover, .lyric-ts.copied { opacity: 1; color: var(--accent); }
+  /* double-click a lyric line to edit its text (timings preserved) */
+  .lyric-line.editing { padding-right: 0; }
+  .lyric-line.editing .word, .lyric-line.editing .lyric-ts { display: none; }
+  .lyric-edit {
+    width: 100%; background: none; border: none; outline: none;
+    color: var(--text); font: inherit; letter-spacing: inherit; padding: 0;
+  }
+  .lyric-edit.save-flash { color: var(--accent); }
   .inst-divider {
     display: flex; align-items: center; gap: 14px;
     padding: 16px 0; color: #4a5468; font-size: 13px; font-weight: 600;
@@ -523,19 +627,22 @@
 
 <aside id="sidebar">
   <div class="logo">
-    <div class="logo-mark">♫</div>
+    <div class="logo-mark"><i data-i="music"></i></div>
     <div><h1>Refrain</h1><span>song → synced transcript</span></div>
   </div>
 
   <form id="new-job">
     <input type="url" id="url-input" placeholder="Paste a song link (Spotify, YouTube…)" required />
     <button class="primary" type="submit" id="submit-btn">Transcribe →</button>
+    <input type="file" id="file-input" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm,.mp4" hidden />
+    <button class="text-btn" id="upload-btn" type="button"
+            title="Transcribe a local audio file instead of downloading one"><i data-i="upload"></i> Upload audio file…</button>
   </form>
 
   <div id="job-card">
     <div class="status-row">
       <div class="spinner"></div><span id="job-status">Working…</span>
-      <button class="job-stop" id="job-stop" type="button" title="Cancel this job">■ Stop</button>
+      <button class="job-stop" id="job-stop" type="button" title="Cancel this job"><i data-i="close"></i> Stop</button>
     </div>
     <div id="job-msg"></div>
   </div>
@@ -546,7 +653,7 @@
   </div>
 
   <details id="models-panel">
-    <summary>⚙︎ Transcription models</summary>
+    <summary><i data-i="setting"></i> Transcription models</summary>
     <div class="cfg-block">
       <div class="block-title">Transcription</div>
       <div class="backend-row">
@@ -555,7 +662,8 @@
       </div>
       <div class="backend-row">
         <label for="t-model">Model</label>
-        <select id="t-model"></select>
+        <select id="t-model" hidden></select>
+        <div class="combo" id="t-model-combo" data-combo-for="t-model"></div>
       </div>
       <div class="backend-row">
         <label for="t-key">API key</label>
@@ -614,7 +722,7 @@
 
 <main id="main">
   <div id="empty">
-    <div class="big">🎧</div>
+    <div class="big"><i data-i="headset"></i></div>
     <h3>Nothing playing yet</h3>
     <p>Paste a song URL in the sidebar. Refrain downloads the audio, transcribes it
     with word-level timestamps, and gives you a karaoke-style player you can export
@@ -623,10 +731,12 @@
 
   <div id="player" style="display:none; flex:1; flex-direction:column;">
     <div id="hero">
-      <div id="hero-art">♫</div>
+      <div id="hero-art"><i data-i="music"></i></div>
       <div id="hero-meta">
-        <h2 id="track-title">—</h2>
-        <p id="track-artist">—</p>
+        <h2 id="track-title" title="Double-click to edit">—</h2>
+        <input class="meta-input" id="title-input" spellcheck="false" />
+        <p id="track-artist" title="Double-click to edit">—</p>
+        <input class="meta-input" id="artist-input" spellcheck="false" placeholder="Add an artist…" />
         <div id="hero-badges">
           <span class="badge green" id="badge-backend">transcribed</span>
           <span class="badge" id="badge-lines">0 lines</span>
@@ -636,15 +746,15 @@
 
     <div id="retrans-row">
       <select id="re-model" title="Model for the next re-transcription"></select>
-      <button class="text-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept">↻ Re-transcribe</button>
+      <button class="text-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept"><i data-i="refresh"></i> Re-transcribe</button>
       <span id="version-pills"></span>
     </div>
 
     <div id="post-row" style="display:none">
       <div class="pp-wrap">
-        <button class="export-btn" id="pp-btn">⚙ Post-processing ▾</button>
+        <button class="export-btn" id="pp-btn"><i data-i="setting"></i> Post-processing <i data-i="down-c" class="caret"></i></button>
         <div class="pp-menu" id="pp-menu">
-          <button id="pp-improve-sync" title="Re-time this transcript using a transcription-only model's measured timestamps">⏱ Improve sync…</button>
+          <button id="pp-improve-sync" title="Re-time this transcript using a transcription-only model's measured timestamps"><i data-i="timer"></i> Improve sync…</button>
         </div>
       </div>
     </div>
@@ -655,25 +765,38 @@
     </div>
 
     <div id="controls">
-      <button class="ctrl-btn" id="rew-btn" title="Back 5s">⏪</button>
+      <button class="ctrl-btn" id="skip-start-btn" title="Skip to beginning"><i data-i="go-start"></i></button>
+      <button class="ctrl-btn" id="rew-btn" title="Back 5s"><i data-i="double-left"></i></button>
       <button class="ctrl-btn" id="play-btn" title="Play / pause">▶</button>
-      <button class="ctrl-btn" id="fwd-btn" title="Forward 5s">⏩</button>
+      <button class="ctrl-btn" id="fwd-btn" title="Forward 5s"><i data-i="double-right"></i></button>
+      <button class="ctrl-btn" id="skip-end-btn" title="Skip to end"><i data-i="go-end"></i></button>
       <div class="speed-group" id="speed-group"></div>
-      <select id="inst-thresh" class="speed-btn" title="Detect instrumental breaks longer than this; clicking a divider jumps past it">
-        <option value="0">no breaks</option>
-        <option value="5">breaks 5s+</option>
-        <option value="10" selected>breaks 10s+</option>
-        <option value="15">breaks 15s+</option>
-        <option value="20">breaks 20s+</option>
-      </select>
+      <div class="pp-wrap view-wrap">
+        <button class="speed-btn" id="view-btn" title="View options: line timestamps, instrumental breaks"><i data-i="setting"></i></button>
+        <div class="pp-menu view-menu" id="view-menu">
+          <label class="view-opt">
+            <input type="checkbox" id="show-ts-toggle" />
+            Show timestamps (mm:ss)
+          </label>
+          <label class="view-opt">Instrumental breaks
+            <select id="inst-thresh" title="Detect instrumental breaks longer than this; clicking a divider jumps past it">
+              <option value="0">no breaks</option>
+              <option value="5">5s+</option>
+              <option value="10" selected>10s+</option>
+              <option value="15">15s+</option>
+              <option value="20">20s+</option>
+            </select>
+          </label>
+        </div>
+      </div>
     </div>
 
     <div id="export-row">
-      <button class="export-btn" data-fmt="lrc">↓ LRC</button>
-      <button class="export-btn" data-fmt="srt">↓ SRT</button>
-      <button class="export-btn" data-fmt="vtt">↓ VTT</button>
-      <button class="export-btn" data-fmt="txt">↓ TXT</button>
-      <button class="export-btn" data-fmt="json">↓ JSON</button>
+      <button class="export-btn" data-fmt="lrc"><i data-i="download"></i> LRC</button>
+      <button class="export-btn" data-fmt="srt"><i data-i="download"></i> SRT</button>
+      <button class="export-btn" data-fmt="vtt"><i data-i="download"></i> VTT</button>
+      <button class="export-btn" data-fmt="txt"><i data-i="download"></i> TXT</button>
+      <button class="export-btn" data-fmt="json"><i data-i="download"></i> JSON</button>
     </div>
 
     <div id="lyrics"></div>
@@ -684,7 +807,7 @@
 
 <div id="modal-overlay">
   <div class="modal">
-    <h3>⏱ Improve sync</h3>
+    <h3><i data-i="timer"></i> Improve sync</h3>
     <p class="modal-sub">Runs a transcription-only model to get measured word
     timestamps, then re-aligns this transcript's words to them. Your lyrics'
     text and line breaks are kept — only timings change. Missing words are
@@ -704,7 +827,8 @@
       </div>
       <div class="backend-row">
         <label for="is-model">Model</label>
-        <select id="is-model"></select>
+        <select id="is-model" hidden></select>
+        <div class="combo" id="is-model-combo" data-combo-for="is-model"></div>
       </div>
       <div class="backend-row">
         <label for="is-key">API key</label>
@@ -719,17 +843,39 @@
   </div>
 </div>
 
+<script src="vendor/iconify.min.js"></script>
 <script>
 const $ = (sel) => document.querySelector(sel);
 const audio = $("#audio");
 let tracks = [];
 let currentTrack = null;
+
+/* ---- icons: Iconify runtime + IconPark set, both vendored (offline) ---- */
+function iconSvg(name) {
+  const ic = (window._ICON_SVGS || {})[name]
+    || (window.Iconify && Iconify.getIcon(`icon-park-outline:${name}`)) || null;
+  return ic ? `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" class="ip-icon">${ic.body}</svg>` : "";
+}
+function hydrateIcons(root) {
+  (root || document).querySelectorAll("i[data-i]").forEach((el) => {
+    el.innerHTML = iconSvg(el.dataset.i);
+    el.removeAttribute("data-i");
+  });
+}
+function setIcon(el, name) { if (el) el.innerHTML = iconSvg(name); }
+fetch("vendor/iconpark.json").then((r) => r.json()).then((data) => {
+  window._ICON_SVGS = data.icons || {};
+  if (window.Iconify) Iconify.addCollection(data);
+  hydrateIcons();
+  setIcon($("#play-btn"), audio.paused ? "play" : "pause");
+}).catch(() => {});
 let currentData = null; // {lines:[{text,start,words:[...]}]}
 let peaks = null;       // waveform bar heights
 let lastManualScroll = 0;
 let pollTimer = null;
 let downXY = null;      // mousedown position for click-vs-drag detection
 let instThreshold = 10; // min gap (s) that counts as an instrumental break
+let showTimestamps = false; // mm:ss on each lyric line (persisted server-side)
 
 async function retranscribe() {
   if (!currentTrack) return;
@@ -781,12 +927,12 @@ function renderLibrary() {
     const card = document.createElement("div");
     card.className = "track-card" + (currentTrack === t.id ? " active" : "");
     card.innerHTML = `
-      <div class="track-art">♫</div>
+      <div class="track-art"><i data-i="music"></i></div>
       <div class="track-meta">
         <div class="track-title">${escapeHtml(t.title)}</div>
         <div class="track-artist">${escapeHtml(t.artist)}${t.hasTranscript ? "" : " · no transcript"}</div>
       </div>
-      <button class="track-del" title="Delete">🗑</button>`;
+      <button class="track-del" title="Delete"><i data-i="delete"></i></button>`;
     card.addEventListener("click", () => selectTrack(t.id));
     card.querySelector(".track-del").addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -795,6 +941,7 @@ function renderLibrary() {
       if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; }
       refreshLibrary();
     });
+    hydrateIcons(card);
     list.appendChild(card);
   }
 }
@@ -825,6 +972,32 @@ $("#new-job").addEventListener("submit", async (e) => {
     showJobCard({ status: "error", message: String(err.message || err) });
   } finally {
     btn.disabled = false;
+  }
+});
+
+/* --- local file upload: small path next to the URL form --- */
+$("#upload-btn").addEventListener("click", () => $("#file-input").click());
+$("#file-input").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  const btn = $("#upload-btn");
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = "Uploading…";
+  try {
+    const fd = new FormData();
+    fd.append("file", f);
+    const res = await fetch("/api/tracks/upload", { method: "POST", body: fd });
+    const data = await res.json();
+    if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : "Upload failed");
+    showJobCard({ status: data.job.status, message: data.job.message });
+    pollJob(data.job.id);
+  } catch (err) {
+    showJobCard({ status: "error", message: String(err.message || err) });
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    e.target.value = "";   // allow re-picking the same file
   }
 });
 
@@ -877,13 +1050,21 @@ async function loadRetransModels() {
     const sel = $("#re-model");
     const prev = sel.value;
     sel.innerHTML = "";
+    // section headers: Audio LLMs vs measured-word transcribers
+    const groups = [];
     for (const m of models) {
       if (!m.available) continue;
-      const tag = m.kind === "audio_llm" ? " · one-step" : "";
+      const label = m.group || (m.kind === "audio_llm" ? "Audio LLM" : "Transcriber");
+      let g = groups.find((x) => x.label === label);
+      if (!g) { g = { label, sel: document.createElement("optgroup") }; groups.push(g); }
       const opt = document.createElement("option");
       opt.value = m.id;
-      opt.textContent = m.name + tag;
-      sel.appendChild(opt);
+      opt.textContent = m.kind === "audio_llm" ? m.name : m.name + " · timed";
+      g.sel.appendChild(opt);
+    }
+    for (const g of groups) {
+      g.sel.label = g.label;
+      sel.appendChild(g.sel);
     }
     const s = data.settings || {};
     const want = (s.transcribe_provider && s.transcribe_model)
@@ -903,44 +1084,35 @@ async function loadVersions(trackId) {
     const versions = idx.versions || [];
     const pillLabel = (v) =>
       `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`
-      + (v.note && v.note.startsWith("sync improved") ? " · sync" : "");
+      + (v.note && v.note.startsWith("sync improved") ? " · sync" : "")
+      + (typeof v.match === "number" ? ` · ${v.match}%` : "");
     const pillTitle = (v) =>
       (v.note || (v.backend ? `via ${v.backend}` : ""))
+      + (typeof v.match === "number"
+         ? `\n${v.match}% of this transcript's words were found by the sync ` +
+           `reference — higher = the retimed timings are more trustworthy`
+         : "")
       + (v.lines ? ` — ${v.lines} lines` : "");
 
-    if (versions.length <= 3) {
-      // few versions: plain pills, same as always
-      for (const v of versions) {
-        const b = document.createElement("button");
-        b.className = "ver-pill" + (v.version === idx.active ? " active" : "");
-        b.textContent = pillLabel(v);
-        b.title = pillTitle(v);
-        b.addEventListener("click", async () => {
-          if (v.version === idx.active) return;
-          await fetch(`/api/tracks/${trackId}/versions/${v.version}/activate`, { method: "POST" });
-          selectTrack(trackId);
-        });
-        wrap.appendChild(b);
-      }
-    } else {
-      // many versions: ONE green pill-shaped dropdown (same styling)
-      const sel = document.createElement("select");
-      sel.className = "ver-select";
-      sel.title = "Choose transcript version";
-      for (const v of versions) {
-        const o = document.createElement("option");
-        o.value = String(v.version);
-        o.textContent = pillLabel(v);
-        o.title = pillTitle(v);
-        if (v.version === idx.active) o.selected = true;
-        sel.appendChild(o);
-      }
-      sel.addEventListener("change", async () => {
-        await fetch(`/api/tracks/${trackId}/versions/${sel.value}/activate`, { method: "POST" });
-        selectTrack(trackId);
-      });
-      wrap.appendChild(sel);
+    // ALWAYS one pill-shaped dropdown (same green styling as the old pills):
+    // even two pills overflow the row's minmax(0,1fr) track, truncating the
+    // last pill's text — a fixed-width select can never wrap or overlap.
+    const sel = document.createElement("select");
+    sel.className = "ver-select";
+    sel.title = "Choose transcript version";
+    for (const v of versions) {
+      const o = document.createElement("option");
+      o.value = String(v.version);
+      o.textContent = pillLabel(v);
+      o.title = pillTitle(v);
+      if (v.version === idx.active) o.selected = true;
+      sel.appendChild(o);
     }
+    sel.addEventListener("change", async () => {
+      await fetch(`/api/tracks/${trackId}/versions/${sel.value}/activate`, { method: "POST" });
+      selectTrack(trackId);
+    });
+    wrap.appendChild(sel);
 
     const activeV = versions.find((v) => v.version === idx.active);
     const badge = document.getElementById("badge-backend");
@@ -969,7 +1141,10 @@ async function selectTrack(trackId) {
   $("#empty").style.display = "none";
   $("#player").style.display = "flex";
   $("#track-title").textContent = currentData.title;
-  $("#track-artist").textContent = currentData.artist;
+  $("#track-artist").textContent = currentData.artist || "—";
+  $("#track-artist").style.opacity = currentData.artist ? "" : ".45";
+  $("#track-artist").title = currentData.artist
+    ? "Double-click to edit artist" : "Double-click to add an artist";
   $("#badge-lines").textContent = `${currentData.lines.length} lines`;
   $("#badge-backend").textContent = "transcribed";
   if (currentData.lines.length) {
@@ -989,6 +1164,166 @@ async function selectTrack(trackId) {
 /* ---------------- lyrics ---------------- */
 let lineNodes = [];     // lyric-line elements, index-aligned with currentData.lines
 let dividerNodes = [];  // {el, lineIdx, end, nextStart} instrumental breaks
+
+/* ---- inline editing ---- */
+function _charOffsetAt(div, text, x) {
+  /* character offset in `text` nearest to viewport x, measured with a
+     hidden probe anchored where the line's words start (the line is
+     position:relative, so the probe's rect shares the click's coordinate
+     space — an off-screen probe would compare against useless coords) */
+  try {
+    const probe = document.createElement("span");
+    probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;top:0;";
+    const word = div.querySelector(".word");
+    if (word) {
+      const cs = getComputedStyle(word);
+      probe.style.font = cs.font;
+      probe.style.letterSpacing = cs.letterSpacing;
+      const wr = word.getBoundingClientRect();
+      const dr = div.getBoundingClientRect();
+      probe.style.left = `${wr.left - dr.left}px`;
+    } else {
+      probe.style.left = "0px";
+    }
+    div.appendChild(probe);
+    const rightOf = (s) => {
+      probe.textContent = s;
+      return probe.getBoundingClientRect().right;
+    };
+    let off = 0, best = Infinity;
+    for (let i = 0; i <= text.length; i++) {
+      const d = Math.abs(x - rightOf(text.slice(0, i)));
+      if (d < best) { best = d; off = i; }
+    }
+    probe.remove();
+    return off;
+  } catch { return null; }
+}
+
+function startLineEdit(idx, div, e) {
+  if (div.querySelector(".lyric-edit")) return;   // already editing
+  const line = currentData.lines[idx];
+  if (!line) return;
+  // map the double-click point to a character offset BEFORE the words are
+  // replaced by the input (browsers select the word on dblclick, so the
+  // click's own selection is useless here)
+  const caretChar = e ? _charOffsetAt(div, line.text, e.clientX) : null;
+  const wasActive = div.classList.contains("active");
+  div.classList.add("editing");
+  div.classList.remove("active");
+  const inp = document.createElement("input");
+  inp.className = "lyric-edit";
+  inp.value = line.text;
+  inp.spellcheck = false;
+  div.appendChild(inp);
+  inp.focus();
+  if (caretChar != null) inp.setSelectionRange(caretChar, caretChar);
+  else inp.select();
+  let done = false;   // Enter then blur must not double-save
+  const finish = async (save) => {
+    if (done) return;
+    done = true;
+    inp.removeEventListener("keydown", onKey);
+    inp.removeEventListener("blur", onBlur);
+    const val = inp.value.trim();
+    inp.remove();
+    div.classList.remove("editing");
+    if (wasActive) div.classList.add("active");
+    if (!save || !val || val === line.text) { buildLyrics(); return; }
+    const res = await fetch(`/api/tracks/${currentTrack}/edit_line`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ lineIndex: idx, text: val }),
+    });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))).detail;
+      showJobCard({ status: "error", message: detail || "Edit failed" });
+      buildLyrics();
+      return;
+    }
+    // re-fetch: the server re-times words (insert/delete), so render from
+    // the stored result rather than patching text locally
+    const fresh = await (await fetch(`/api/tracks/${currentTrack}`)).json();
+    currentData.lines = fresh.lines;
+    buildLyrics();
+    loadVersions(currentTrack);   // the edit is a new version — show it
+    const node = lineNodes[idx];
+    if (node) {   // small save acknowledgment
+      node.classList.add("save-flash");
+      setTimeout(() => node.classList.remove("save-flash"), 900);
+    }
+  };
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    e.stopPropagation();   // keep player hotkeys out of the editor
+  };
+  const onBlur = () => finish(false);
+  inp.addEventListener("keydown", onKey);
+  inp.addEventListener("blur", onBlur);
+}
+
+/* ---- title/artist inline editing (double-click) ---- */
+function startMetaEdit(which) {          // which: "title" | "artist"
+  const isTitle = which === "title";
+  const view = $(isTitle ? "#track-title" : "#track-artist");
+  const inp = $(isTitle ? "#title-input" : "#artist-input");
+  if (inp.classList.contains("visible")) return;
+  view.classList.add("editing");
+  inp.classList.add("visible");
+  inp.value = isTitle ? currentData.title : currentData.artist;
+  inp.focus();
+  inp.select();
+  const finish = async (save) => {
+    inp.removeEventListener("keydown", onKey);
+    inp.removeEventListener("blur", onBlur);
+    inp.classList.remove("visible");
+    view.classList.remove("editing");
+    const val = inp.value.trim();
+    if (!save || !val) {   // empty artist = clear; empty title = keep old
+      if (!isTitle && !val && save) {
+        await fetch(`/api/tracks/${currentTrack}`, {
+          method: "PATCH", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ artist: "" }),
+        });
+        currentData.artist = "";
+        view.textContent = "—";
+      }
+      return;
+    }
+    if (val === (isTitle ? currentData.title : currentData.artist)) return;
+    const body = isTitle ? { title: val } : { artist: val };
+    const res = await fetch(`/api/tracks/${currentTrack}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const detail = (await res.json().catch(() => ({}))).detail;
+      showJobCard({ status: "error", message: detail || "Rename failed" });
+      return;
+    }
+    if (isTitle) { currentData.title = val; view.textContent = val; }
+    else {
+      currentData.artist = val; view.textContent = val;
+      view.style.opacity = "";
+      view.title = "Double-click to edit artist";
+    }
+    refreshLibrary();   // sidebar cards show title/artist too
+  };
+  const onKey = (e) => {
+    if (e.key === "Enter") { e.preventDefault(); finish(true); }
+    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+  };
+  const onBlur = () => finish(true);
+  inp.addEventListener("keydown", onKey);
+  inp.addEventListener("blur", onBlur);
+}
+
+$("#track-title").addEventListener("dblclick", () => {
+  if (currentTrack) startMetaEdit("title");
+});
+$("#track-artist").addEventListener("dblclick", () => {
+  if (currentTrack) startMetaEdit("artist");
+});
 
 function _makeDivider(secs, kind, seekTo) {
   const d = document.createElement("div");
@@ -1015,6 +1350,8 @@ function _makeDivider(secs, kind, seekTo) {
 }
 
 function buildLyrics() {
+  // never rebuild under an open editor (it would be destroyed mid-edit)
+  if (document.querySelector(".lyric-edit")) return;
   const wrap = $("#lyrics");
   wrap.innerHTML = "";
   lineNodes = [];
@@ -1048,8 +1385,28 @@ function buildLyrics() {
       span.dataset.end = w.end;
       div.appendChild(span);
     });
+    if (showTimestamps) {
+      const ts = document.createElement("span");
+      ts.className = "lyric-ts";
+      ts.textContent = fmtTime(line.start);
+      ts.title = "Click to copy timestamp";
+      ts.addEventListener("mousedown", (e) => e.stopPropagation());
+      ts.addEventListener("dblclick", (e) => e.stopPropagation());   // no editor from the ts
+      ts.addEventListener("click", (e) => {
+        e.stopPropagation();   // copy the time, don't seek the line
+        navigator.clipboard?.writeText(ts.textContent).catch(() => {});
+        ts.classList.add("copied");
+        setTimeout(() => ts.classList.remove("copied"), 900);
+      });
+      div.appendChild(ts);
+    }
     div.addEventListener("mousedown", (e) => { downXY = [e.clientX, e.clientY]; });
+    div.addEventListener("dblclick", (e) => {
+      e.stopPropagation();
+      startLineEdit(idx, div, e);
+    });
     div.addEventListener("click", (e) => {
+      if (div.classList.contains("editing")) return;   // caret moves, not seeks
       // ignore clicks that finish a text selection or a scroll-drag
       const sel = window.getSelection && window.getSelection();
       if (sel && sel.type === "Range") return;
@@ -1083,7 +1440,8 @@ let lastActive = -1;
 let lastScrollTarget = -1;
 
 function tickLyrics() {
-  if (currentData && currentData.lines.length) {
+  if (currentData && currentData.lines.length
+      && !document.querySelector(".lyric-edit")) {
     const t = audio.currentTime;
     const lines = currentData.lines;
     // binary search: active line = last line with start <= t
@@ -1150,6 +1508,13 @@ $("#lyrics").addEventListener("touchmove", () => { lastManualScroll = Date.now()
 $("#inst-thresh").addEventListener("change", (e) => {
   instThreshold = +e.target.value;
   if (currentData) buildLyrics();   // rebuild with/without dividers
+});
+
+$("#show-ts-toggle").addEventListener("change", (e) => {
+  showTimestamps = e.target.checked;
+  document.body.classList.toggle("ts-on", showTimestamps);
+  if (currentData) buildLyrics();   // rebuild with/without timestamps
+  putSettings({ show_timestamps: showTimestamps });
 });
 
 /* waveform repaints on a timer, not the animation frame */
@@ -1232,8 +1597,12 @@ $("#waveform").addEventListener("click", (e) => {
 $("#play-btn").addEventListener("click", () => {
   if (audio.paused) audio.play(); else audio.pause();
 });
-audio.addEventListener("play", () => $("#play-btn").textContent = "⏸");
-audio.addEventListener("pause", () => $("#play-btn").textContent = "▶");
+audio.addEventListener("play", () => setIcon($("#play-btn"), "pause"));
+audio.addEventListener("pause", () => setIcon($("#play-btn"), "play"));
+$("#skip-start-btn").addEventListener("click", () => { audio.currentTime = 0; });
+$("#skip-end-btn").addEventListener("click", () => {
+  audio.currentTime = Math.max(0, (audio.duration || 0) - 0.05);
+});
 $("#rew-btn").addEventListener("click", () => audio.currentTime = Math.max(0, audio.currentTime - 5));
 $("#fwd-btn").addEventListener("click", () => audio.currentTime = Math.min(audio.duration || 1e9, audio.currentTime + 5));
 
@@ -1287,7 +1656,7 @@ function fillProviderSelect(sel, purpose, current) {
   if ([...sel.options].some((o) => o.value === current)) sel.value = current;
 }
 
-function fillModelSelect(sel, pairs, current) {
+function fillModelSelect(sel, pairs, current, groups) {
   sel.innerHTML = "";
   for (const [api, name] of pairs || []) {
     const opt = document.createElement("option");
@@ -1297,6 +1666,99 @@ function fillModelSelect(sel, pairs, current) {
   }
   if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
   else if (sel.options.length) sel.value = sel.options[0].value;
+  syncCombo(sel);   // grouped combo box mirrors the hidden native select
+  void groups;      // (kept for signature clarity)
+}
+
+/* ---------- grouped combo box ----------
+   Real <select> can't render section headers cross-browser, so the model
+   picker renders a button + popover listbox with sticky header rows. The
+   hidden native <select> stays the source of truth: the combo mirrors it,
+   and picking an option dispatches "change" so existing handlers run. */
+function syncCombo(sel) {
+  const combo = document.querySelector(`.combo[data-combo-for="${sel.id}"]`);
+  if (!combo) return;
+  let btn = combo.querySelector(".combo-btn");
+  if (!btn) {
+    combo.innerHTML =
+      `<button type="button" class="combo-btn" aria-haspopup="listbox">` +
+      `<span class="combo-label"></span><span class="combo-caret"><i data-i="down-c"></i></span></button>` +
+      `<div class="combo-pop" role="listbox"></div>`;
+    btn = combo.querySelector(".combo-btn");
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const open = combo.classList.toggle("open");
+      if (open) {
+        const opt = combo.querySelector(".combo-opt.selected");
+        if (opt) opt.scrollIntoView({ block: "nearest" });
+      }
+    });
+  }
+  const pop = combo.querySelector(".combo-pop");
+  pop.innerHTML = "";
+  hydrateIcons(combo);
+  const addOpt = (node) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "combo-opt";
+    b.setAttribute("role", "option");
+    if (node.disabled) b.disabled = true;
+    b.textContent = node.textContent;
+    if (sel.value === node.value) b.classList.add("selected");
+    b.addEventListener("click", () => {
+      if (node.disabled) return;
+      sel.value = node.value;
+      combo.classList.remove("open");
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      syncCombo(sel);
+    });
+    pop.appendChild(b);
+  };
+  // walk the select's children in order: top-level <option>s (flat lists)
+  // and <optgroup label> wrappers (grouped lists, options nested inside)
+  for (const node of sel.children) {
+    if (node.tagName === "OPTGROUP") {
+      const h = document.createElement("div");
+      h.className = "combo-head";
+      h.textContent = node.label;
+      pop.appendChild(h);
+      for (const opt of node.children) addOpt(opt);
+    } else if (node.tagName === "OPTION") {
+      addOpt(node);
+    }
+  }
+  const cur = sel.selectedOptions && sel.selectedOptions[0];
+  combo.querySelector(".combo-label").textContent = cur ? cur.textContent : "";
+}
+document.addEventListener("click", (e) => {
+  for (const combo of document.querySelectorAll(".combo.open")) {
+    if (!combo.contains(e.target)) combo.classList.remove("open");
+  }
+});
+
+/* grouped variant: models carry a server-provided `group` label and are
+   rendered under sticky headers (Audio LLM vs Transcriber sections) */
+function fillGroupedModelSelect(sel, models, current) {
+  sel.innerHTML = "";
+  const groups = [];
+  for (const m of models || []) {
+    let g = groups.find((x) => x.label === (m.group || "Models"));
+    if (!g) { g = { label: m.group || "Models", opts: [] }; groups.push(g); }
+    g.opts.push([m.api_model, m.name]);
+  }
+  for (const g of groups) {
+    const og = document.createElement("optgroup");
+    og.label = g.label;
+    for (const [v, n] of g.opts) {
+      const o = document.createElement("option");
+      o.value = v; o.textContent = n;
+      og.appendChild(o);
+    }
+    sel.appendChild(og);
+  }
+  if (current && [...sel.options].some((o) => o.value === current)) sel.value = current;
+  else if (sel.options.length) sel.value = sel.options[0].value;
+  syncCombo(sel);
 }
 
 function renderKeyState(stateSpan, input, prov) {
@@ -1360,12 +1822,19 @@ function renderLlmStatus(llm, provider) {
 
 function renderConfig(data) {
   const s = data.settings || {};
+  // hydrate the timestamps toggle (only rebuild lyrics when it actually changed)
+  const tsOn = !!s.show_timestamps;
+  if (tsOn !== showTimestamps) {
+    showTimestamps = tsOn;
+    document.body.classList.toggle("ts-on", tsOn);
+    if (currentData) buildLyrics();
+  }
+  $("#show-ts-toggle").checked = showTimestamps;
   // --- block 1: transcription ---
   fillProviderSelect($("#t-provider"), "transcribe", s.transcribe_provider);
   const tProv = $("#t-provider").value || "gemini";
   const tModels = (data.models || []).filter((m) => m.provider === tProv);
-  fillModelSelect($("#t-model"),
-                  tModels.map((m) => [m.api_model, m.name]), s.transcribe_model);
+  fillGroupedModelSelect($("#t-model"), tModels, s.transcribe_model);
   renderKeyState($("#t-key-state"), $("#t-key"),
                  providersCache.find((p) => p.id === tProv) || {});
   const activeId = `${tProv}:${$("#t-model").value}`;
@@ -1404,8 +1873,8 @@ async function refreshModels() {
 $("#t-provider").addEventListener("change", async () => {
   const prov = $("#t-provider").value;
   const models = ((modelsData || {}).models || []).filter((m) => m.provider === prov);
-  fillModelSelect($("#t-model"), models.map((m) => [m.api_model, m.name]),
-                  models.length ? models[0].api_model : "");
+  fillGroupedModelSelect($("#t-model"), models,
+                         models.length ? models[0].api_model : "");
   renderKeyState($("#t-key-state"), $("#t-key"),
                  providersCache.find((p) => p.id === prov) || {});
   await putSettings({ transcribe_provider: prov,
@@ -1541,9 +2010,16 @@ $("#llm-discover").addEventListener("click", async () => {
 $("#pp-btn").addEventListener("click", (e) => {
   e.stopPropagation();
   $("#pp-menu").classList.toggle("open");
+  $("#view-menu").classList.remove("open");
+});
+$("#view-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("#view-menu").classList.toggle("open");
+  $("#pp-menu").classList.remove("open");
 });
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".pp-wrap")) $("#pp-menu").classList.remove("open");
+  if (!e.target.closest(".pp-wrap"))
+    document.querySelectorAll(".pp-menu.open").forEach((m) => m.classList.remove("open"));
 });
 
 /* --- improve-sync modal --- */
@@ -1557,9 +2033,8 @@ function renderIsModal() {
   fillProviderSelect(provSel, "transcribe", provSel.value || "groq");
   const prov = provSel.value || "groq";
   const models = isTranscribeOnlyModels(prov);
-  fillModelSelect($("#is-model"),
-                  models.map((m) => [m.api_model, m.name]),
-                  models.length ? models[0].api_model : "");
+  fillGroupedModelSelect($("#is-model"), models,
+                         models.length ? models[0].api_model : "");
   renderKeyState($("#is-key-state"), $("#is-key"),
                  providersCache.find((p) => p.id === prov) || {});
 }

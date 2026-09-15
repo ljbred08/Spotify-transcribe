@@ -71,13 +71,17 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 The **⚙ Transcription models** panel in the app (bottom of the sidebar) manages everything.
 The catalog is **dynamic**: models whose API key is present show as available; picking one
 is instant (nothing to download). Choices persist in `data/settings.json` and apply to
-the next job (no restart).
+the next job (no restart). The model dropdown is grouped: **Audio LLMs** (listen +
+format in one step) vs **Transcribers** (measured word timings + a formatter LLM).
+Only models that can return word-level timestamps are listed — plain-text STT endpoints
+can't drive the karaoke word sweep and are deliberately excluded.
 
 | Model | Kind | Good at |
 | --- | --- | --- |
 | `gemini:gemini-flash-latest` | audio LLM | one-step: newest Gemini Flash; listens, returns formatted synced lyrics |
 | `gemini:gemini-pro-latest` | audio LLM | one-step: newest Gemini Pro; highest quality, slower |
 | `gemini:gemini-flash-lite-latest` | audio LLM | one-step: lightweight/fast Gemini Flash Lite |
+| `gemini:gemini-3.5-transcribe` | transcriber | Google's dedicated ASR; measured word timings via the Interactions API |
 | `openrouter:~google/gemini-flash-latest` | audio LLM | newest Gemini Flash via OpenRouter |
 | `openrouter:~google/gemini-pro-latest` | audio LLM | newest Gemini Pro via OpenRouter |
 | `openrouter:google/gemini-3.5-flash-lite` | audio LLM | lightweight Gemini 3.5 Flash via OpenRouter (no `latest` alias there) |
@@ -86,6 +90,7 @@ the next job (no restart).
 | `openrouter:meta/muse-spark-1.3` (+ contributor) | audio LLM | Meta multimodal audio (contributor = discounted, trains on prompts) |
 | `openrouter:thinkingmachines/inkling` (+ small) | audio LLM | open-weight MoE models with native audio understanding |
 | `openrouter:nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free` · `xiaomi/mimo-v2.5` | audio LLM | lightweight omni models |
+| `openrouter:deepgram/nova-3`, `x-ai/grok-stt-1.0`, `mistralai/voxtral-small-24b-2507-stt`, `mistralai/voxtral-mini-transcribe`, `microsoft/mai-transcribe-2`, `qwen/qwen3-asr-flash…`, `qwen/qwen3-asr-0.6b`, `fish-audio/transcribe-1`, `openai/whisper-large-v3`(+`-turbo`) | transcriber | OpenRouter STT models with word-level timestamps via `/audio/transcriptions` (need formatter block) |
 | `groq:whisper-large-v3` / `…-turbo` | transcriber | fast word-level timestamps (needs formatter block) |
 | `openai:whisper-1` / `gpt-4o-transcribe` / `…-mini-transcribe` | transcriber | word/segment timestamps (needs formatter block) |
 

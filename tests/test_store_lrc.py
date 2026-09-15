@@ -99,3 +99,30 @@ def test_versions_and_activation_on_lrc_storage(tmp_path, monkeypatch):
     back = store.load_transcript("t3")
     assert back[0].text == "We're no strangers to love"
     assert back[0].words[-1].end == 21.66
+
+
+def test_match_percent_persists_on_version(tmp_path, monkeypatch):
+    """improve-sync's match accuracy is stored per version so several resyncs
+    can be compared; versions without one (plain transcribes) omit the key."""
+    monkeypatch.setattr("app.config.DATA_DIR", tmp_path)
+    store = Store()
+    track = __import__("app.models", fromlist=["Track"]).Track(
+        id="t4", url="u", title="T", artist="A")
+    store.add_track(track)
+
+    store.save_transcript("t4", make_lines(), backend="a")
+    store.save_transcript("t4", make_lines(), backend="a",
+                          note="sync improved via groq:whisper-large-v3 "
+                               "(86% match · 203/236 matched, 1 forced, "
+                               "29 kept, 3 dropped)", match=86)
+    store.save_transcript("t4", make_lines(), backend="a",
+                          note="sync improved via groq:whisper-large-v3-turbo "
+                               "(52% match · …)", match=52)
+    idx = store.list_versions("t4")
+    assert "match" not in idx["versions"][0]
+    assert idx["versions"][1]["match"] == 86
+    assert idx["versions"][2]["match"] == 52
+    # survives a reload from disk
+    idx2 = Store().list_versions("t4")
+    assert idx2["versions"][1]["match"] == 86
+    assert idx2["versions"][2]["match"] == 52
