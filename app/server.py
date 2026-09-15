@@ -369,7 +369,8 @@ def update_settings(body: dict):
     keys = ("backend", "model", "cloud_model", "llm_format", "llm_url",
             "llm_model", "llm_model_ollama", "llm_provider",
             "transcribe_provider", "transcribe_model", "keys",
-            "temperature", "top_p", "transcribe_timeout", "show_timestamps")
+            "temperature", "top_p", "transcribe_timeout", "show_timestamps",
+            "highlight_style")
     try:
         out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:

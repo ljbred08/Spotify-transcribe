@@ -536,6 +536,7 @@
   /* optional per-line timestamps (settings toggle): right-aligned mm:ss,
      click = copy. body.ts-on is set by the same toggle. */
   body.ts-on .lyric-line { padding-right: 56px; }
+  /* sweep-gradient progress runs 0..1 across the active line's words */
   .lyric-ts {
     position: absolute; right: 0; top: 50%; transform: translateY(-50%);
     font-size: 11px; font-weight: 600; letter-spacing: .02em;
@@ -571,6 +572,25 @@
     -webkit-background-clip: text; background-clip: text;
     color: transparent;
   }
+  /* "sweep" style: one smooth gradient flows across the whole line, sized
+     and positioned by --p (0..1 progress), so sung words are filled with a
+     moving gradient front instead of per-word color flips */
+  body.hl-sweep .lyric-line.active .word {
+    color: #3d4557;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2) 70%,
+                                rgba(74,222,128,.25) 100%) no-repeat;
+    background-size: calc(var(--p, 0) * 100%) 100%;
+    -webkit-background-clip: text; background-clip: text;
+  }
+  body.hl-sweep .lyric-line.past {
+    color: #262d3d;
+  }
+  body.hl-sweep .lyric-line.past .word {
+    color: #262d3d;
+    background: none;
+  }
+  /* default = "glow" (per-word); the sweep style ignores the word classes */
+  body.hl-glow .lyric-line.active .word { color: #3d4557; }
 
   /* ---------- empty state ---------- */
   #empty {
@@ -816,6 +836,13 @@
             <input type="checkbox" id="show-ts-toggle" />
             Show timestamps (mm:ss)
           </label>
+          <label class="view-opt">
+            Word highlight
+            <select id="hl-style" title="How the current word lights up">
+              <option value="sweep" selected>Smooth sweep</option>
+              <option value="glow">Word by word</option>
+            </select>
+          </label>
           <label class="view-opt">Instrumental breaks
             <select id="inst-thresh" title="Detect instrumental breaks longer than this; clicking a divider jumps past it">
               <option value="0">no breaks</option>
@@ -920,6 +947,7 @@ let pollTimer = null;
 let downXY = null;      // mousedown position for click-vs-drag detection
 let instThreshold = 10; // min gap (s) that counts as an instrumental break
 let showTimestamps = false; // mm:ss on each lyric line (persisted server-side)
+let highlightStyle = "sweep";   // "sweep" (gradient) | "glow" (whole-word)
 
 async function retranscribe() {
   if (!currentTrack) return;
@@ -1210,6 +1238,7 @@ async function selectTrack(trackId) {
 /* ---------------- lyrics ---------------- */
 let lineNodes = [];     // lyric-line elements, index-aligned with currentData.lines
 let dividerNodes = [];  // {el, lineIdx, end, nextStart} instrumental breaks
+let wordTimings = [];   // per-line [start,end] pairs, for the sweep progress
 
 /* ---- inline editing ---- */
 function _charOffsetAt(div, text, x, y) {
@@ -1420,6 +1449,7 @@ function buildLyrics() {
   wrap.innerHTML = "";
   lineNodes = [];
   dividerNodes = [];
+  wordTimings = [];
   // lead-in: a long intro gets a divider (click to skip — never auto-jump,
   // or playing from 0:00 would be impossible)
   if (instThreshold > 0 && currentData.lines.length
@@ -1441,6 +1471,7 @@ function buildLyrics() {
     const div = document.createElement("div");
     div.className = "lyric-line";
     div.dataset.idx = idx;
+    const times = [];
     line.words.forEach((w) => {
       const span = document.createElement("span");
       span.className = "word";
@@ -1448,7 +1479,9 @@ function buildLyrics() {
       span.dataset.start = w.start;
       span.dataset.end = w.end;
       div.appendChild(span);
+      times.push([w.start, w.end]);
     });
+    wordTimings.push(times);
     if (showTimestamps) {
       const ts = document.createElement("span");
       ts.className = "lyric-ts";
@@ -1502,6 +1535,7 @@ function buildLyrics() {
    mid-flight. Now the DOM is touched only when state CHANGES.             */
 let lastActive = -1;
 let lastScrollTarget = -1;
+let sweepP = -1;             // last written sweep progress (skip redundant writes)
 
 function tickLyrics() {
   if (currentData && currentData.lines.length
@@ -1520,9 +1554,11 @@ function tickLyrics() {
       const wrap = $("#lyrics");
       if (lastActive >= 0 && lineNodes[lastActive]) {
         lineNodes[lastActive].classList.remove("active");
+        lineNodes[lastActive].style.removeProperty("--p");
         lineNodes[lastActive].querySelectorAll(".word.done, .word.singing")
           .forEach((el) => el.classList.remove("done", "singing"));
       }
+      sweepP = -1;
       for (let i = 0; i < lineNodes.length; i++) {
         lineNodes[i].classList.toggle("past", active !== -1 && i < active);
         if (i === active) lineNodes[i].classList.add("active");
@@ -1540,14 +1576,34 @@ function tickLyrics() {
       lastActive = active;
     }
 
-    // (3) word sweep on the active line only (cheap: ~8 spans)
+    // (3) word sweep on the active line only (cheap: ~8 spans).
+    // "glow" toggles per-word classes; "sweep" sets one CSS var so a single
+    // gradient flows smoothly across the line between word boundaries.
     if (active !== -1) {
       const node = lineNodes[active];
       if (node) {
-        for (const span of node.querySelectorAll(".word")) {
-          const ws = +span.dataset.start, we = +span.dataset.end;
-          span.classList.toggle("done", t >= we);
-          span.classList.toggle("singing", t >= ws && t < we);
+        const times = wordTimings[active] || [];
+        if (highlightStyle === "sweep") {
+          let p = 0;
+          for (let wi = 0; wi < times.length; wi++) {
+            const [ws, we] = times[wi];
+            if (t >= we) p = (wi + 1) / times.length;      // fully sung
+            else if (t >= ws) {                             // inside the word
+              p = (wi + Math.min(1, (t - ws) / Math.max(0.001, we - ws)))
+                  / times.length;
+              break;
+            } else break;
+          }
+          if (Math.abs(p - sweepP) > 0.001) {
+            sweepP = p;
+            node.style.setProperty("--p", p.toFixed(3));
+          }
+        } else {
+          for (const span of node.querySelectorAll(".word")) {
+            const ws = +span.dataset.start, we = +span.dataset.end;
+            span.classList.toggle("done", t >= we);
+            span.classList.toggle("singing", t >= ws && t < we);
+          }
         }
       }
     }
@@ -1579,6 +1635,18 @@ $("#show-ts-toggle").addEventListener("change", (e) => {
   document.body.classList.toggle("ts-on", showTimestamps);
   if (currentData) buildLyrics();   // rebuild with/without timestamps
   putSettings({ show_timestamps: showTimestamps });
+});
+
+/* word-highlight style: "sweep" = smooth gradient, "glow" = word by word */
+function applyHighlightStyle(style) {
+  highlightStyle = style === "glow" ? "glow" : "sweep";
+  document.body.classList.toggle("hl-sweep", highlightStyle === "sweep");
+  document.body.classList.toggle("hl-glow", highlightStyle === "glow");
+  $("#hl-style").value = highlightStyle;
+}
+$("#hl-style").addEventListener("change", (e) => {
+  applyHighlightStyle(e.target.value);
+  putSettings({ highlight_style: highlightStyle });
 });
 
 /* waveform repaints on a timer, not the animation frame */
@@ -1936,6 +2004,7 @@ function renderConfig(data) {
     if (currentData) buildLyrics();
   }
   $("#show-ts-toggle").checked = showTimestamps;
+  applyHighlightStyle(s.highlight_style || highlightStyle);
   // --- block 1: transcription ---
   fillProviderSelect($("#t-provider"), "transcribe", s.transcribe_provider);
   const tProv = $("#t-provider").value || "gemini";

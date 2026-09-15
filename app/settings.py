@@ -23,6 +23,7 @@ _DEFAULTS = {
     "top_p": 1.0,
     "transcribe_timeout": 180,        # seconds; watchdog for slow models
     "show_timestamps": False,          # mm:ss on each lyric line (UI toggle)
+    "highlight_style": "sweep",        # "sweep" (word gradient) | "glow" (whole-word)
     # --- block 2 (formatter; only used with transcribe-only models) ----------
     "llm_provider": "ollama",
     "llm_model": "",                   # api model for the formatter provider
@@ -112,6 +113,11 @@ class Settings:
                 self._data["llm_format"] = bool(fields["llm_format"])
             if "show_timestamps" in fields:
                 self._data["show_timestamps"] = bool(fields["show_timestamps"])
+            if "highlight_style" in fields:
+                val = str(fields["highlight_style"])
+                if val not in ("sweep", "glow"):
+                    raise ValueError("highlight_style must be 'sweep' or 'glow'")
+                self._data["highlight_style"] = val
             if "temperature" in fields:
                 try:
                     temp = float(fields["temperature"])
