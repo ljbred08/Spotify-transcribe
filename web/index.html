@@ -46,8 +46,12 @@
     gap: 14px;
     height: 100vh;
   }
-  /* collapse/expand: a small icon in the sidebar header; collapsed state is
-     a compact one-button-wide rail (logo mark + expand icon), not empty */
+  /* collapse/expand: a square in the sidebar header; collapsed state is a compact
+     one-button-wide rail (expand icon + plus + covers), not empty.
+     28px with a 14px glyph is the PHONE size — there the header is a compressed
+     bar and the whole row, not this button, is the tap target. Every other stage
+     uses the rail-settings scale (40px box, 18px glyph) set in the media block
+     below, in both states, so the chevron and the gear match. */
   #side-toggle {
     margin-left: auto; flex: none;
     background: none; border: none; color: var(--muted);
@@ -57,6 +61,10 @@
   }
   #side-toggle:hover { color: var(--text); background: var(--panel-2); }
   #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .2s ease; }
+  /* The rail's own two bits: the plus on the Transcribe button and the settings
+     entry at the foot of the sidebar. Both exist only while collapsed — the rail
+     block further down is where they get shown and sized. */
+  #submit-btn .rail-icon, #rail-settings { display: none; }
   /* The rail only exists where the sidebar sits beside the content: on phones the
      sidebar is a header, so `side-collapsed` is deliberately inert there. This is
      written as the *exact complement* of the phone query rather than as
@@ -65,15 +73,133 @@
      px wide, and both blocks dropped out there, so every rule in this file fell
      back to the desktop defaults and the full-size sidebar flashed up mid-drag. */
   @media not all and (max-width: 538px) {
+    /* The chevron is the same square as the rail's settings button — 40px box,
+       18px glyph — in BOTH states. Expanded it used to be a 28px box with a 14px
+       glyph, which made the one control that folds the sidebar read as smaller
+       and more secondary than the gear at the foot of the rail. Matching them
+       costs the header under 2px (42.3px -> 44px), because the 40px button is now
+       the tallest thing in the logo row; the row is `align-items: center`, so the
+       mark and the wordmark simply stay centred in it. */
+    #side-toggle { width: 40px; height: 40px; border-radius: 12px; }
+    #side-toggle .ip-icon { width: 18px; height: 18px; }
     body.side-collapsed #sidebar {
-      width: 56px; min-width: 56px; padding: 16px 10px; gap: 12px;
+      width: 56px; min-width: 56px; padding: 14px 8px; gap: 12px;
       align-items: center;
     }
-    body.side-collapsed .logo { flex-direction: column; gap: 12px; padding: 0; }
-    body.side-collapsed .logo-text, body.side-collapsed form#new-job,
-    body.side-collapsed #job-card, body.side-collapsed #library,
-    body.side-collapsed #models-panel { display: none; }
+    /* the auto margin is one of the two that float the "add a song" plus and the
+       covers block in the middle of the rail: this one takes the space above it,
+       #library's takes the space below, and since the chevron row and the gear row
+       are both 40px plus one 12px gap the block lands dead centre. */
+    body.side-collapsed .logo {
+      flex-direction: column; gap: 0; padding: 0; margin-bottom: auto;
+    }
+    /* The chevron is the rail's whole top row — the wordmark and the logo square
+       go, and what is left is the 40px square it already is when expanded (that
+       size is shared, above), so the column lines up and only the direction
+       flips. */
     body.side-collapsed #side-toggle .ip-icon { transform: rotate(180deg); }
+
+    /* ---------- the rail is a true miniature ----------
+       One column of 40px squares: the expand chevron, the "add a song" plus, one
+       album-art square per library track, and the models gear at the foot. Only
+       panel-shaped things go away — the wordmark, the URL field, the button
+       labels, the track titles and the models details, which the gear reopens as
+       a sheet of its own (see the rail-settings block below). 56px of sidebar
+       less 8px of padding each side is exactly one 40px square, so every row
+       lines up. */
+    body.side-collapsed .logo-mark,
+    body.side-collapsed .logo-text,
+    body.side-collapsed #url-input,
+    body.side-collapsed #upload-btn,
+    body.side-collapsed #models-panel,
+    body.side-collapsed #library h2,
+    body.side-collapsed .track-meta,
+    body.side-collapsed .track-del { display: none; }
+    /* showJobCard sets an inline display, so a plain rule would lose to it and a
+       40px-wide progress card would turn up in the rail */
+    body.side-collapsed #job-card { display: none !important; }
+
+    /* The one way to add a song, sitting directly above the covers, and one of the
+       two things that block is made of. Deliberately not the green primary button:
+       at 40px that reads as an action already taken rather than as a square you
+       can press. It is a plain lighter grey — not the translucent dark of the
+       fetch-metadata overlay, which only works because there is artwork behind
+       it; over the bare sidebar panel it left the square almost invisible. */
+    body.side-collapsed form#new-job {
+      background: none; border: none; padding: 0;
+      display: flex; flex-direction: column; align-items: center;
+    }
+    body.side-collapsed #submit-btn {
+      width: 40px; height: 40px; border-radius: 12px;
+      /* `align-content: center` is not redundant with `place-items: center`: the
+         "Transcribe →" text is only hidden by font-size, so it is still a zero-
+         height anonymous grid item in a second row, and grid's default
+         align-content (stretch) splits the free height between the two auto rows
+         and pushes the glyph 4px above middle. */
+      display: grid; place-items: center; align-content: center;
+      /* button.primary's 11px/14px padding has to go too: a bordered 40px box
+         leaves a 12×18 content box behind that padding, so the 22px glyph was
+         centred in that instead — 5.6px right of the square's own middle. */
+      padding: 0;
+      font-size: 0;                              /* icon-only: hides the label */
+      background: var(--panel-2);
+      border: 1px solid #2c3549; color: var(--text);
+    }
+    body.side-collapsed #submit-btn:hover { background: #222b3f; border-color: #3a465e; }
+    body.side-collapsed #submit-btn .rail-icon { display: inline-flex; }
+    body.side-collapsed #submit-btn .ip-icon { width: 22px; height: 22px; }
+
+    /* one album-art square per track, nothing else. It no longer swallows the
+       column's spare height (`flex: 1`), because that is exactly what parked the
+       block under the chevron; it now sizes to its covers and gives the leftover
+       height back through the auto margin below. `overflow-y: auto` still lets a
+       long library scroll — and because a scroll container's automatic minimum
+       size is zero, it is also what lets the block shrink instead of overflowing. */
+    body.side-collapsed #library {
+      width: 100%; flex: 0 1 auto; overflow-y: auto; margin-bottom: auto;
+    }
+    body.side-collapsed #track-list { display: flex; flex-direction: column; gap: 8px; }
+    body.side-collapsed .track-card {
+      padding: 0; border: none; background: none; border-radius: 12px; width: 100%;
+    }
+    body.side-collapsed .track-card:hover { background: none; }
+    body.side-collapsed .track-art { width: 100%; height: auto; aspect-ratio: 1; border-radius: 12px; }
+    /* the card's border was the active marker; the cover takes it over */
+    body.side-collapsed .track-card.active .track-art { box-shadow: 0 0 0 2px var(--accent); }
+
+    /* ---------- settings, at the foot of the rail ---------- */
+    /* no auto margin here: the logo and the library already take the column's
+       spare height between them, and a third auto margin would just claim a third
+       of it and lift the block off centre */
+    body.side-collapsed #rail-settings {
+      display: grid; place-items: center; margin-top: 0; flex: none;
+      width: 40px; height: 40px; padding: 0; border-radius: 12px;
+      background: none; border: 1px solid transparent; color: var(--muted); cursor: pointer;
+    }
+    body.side-collapsed #rail-settings:hover { color: var(--text); background: var(--panel-2); }
+    body.side-collapsed #rail-settings .ip-icon { width: 18px; height: 18px; }
+    body.side-collapsed.rail-settings-open #rail-settings {
+      color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07);
+    }
+
+    /* ---------- the models sheet ----------
+       `#models-panel` is a <details>, so it can simply become the sheet: fixed
+       beside the rail (56px + an 8px gap), scrolled on its own, with the summary
+       pinned so the heading doesn't scroll away. The rail keeps its width and its
+       squares, and — since the scrim sits below the sidebar in this state — keeps
+       taking clicks, so the gear toggles the sheet shut again. */
+    body.rail-settings-open #sidebar { position: relative; z-index: 130; }
+    body.rail-settings-open #side-scrim { display: block; }
+    body.rail-settings-open #models-panel {
+      display: block; position: fixed; z-index: 130;
+      left: calc(56px + 8px); top: 12px; bottom: 12px;
+      width: 340px; max-width: 86vw; overflow-y: auto;
+      box-shadow: 0 24px 60px rgba(2, 4, 8, .6);
+      animation: side-in 180ms ease-out;
+    }
+    body.rail-settings-open #models-panel[open] summary {
+      position: sticky; top: 0; z-index: 1; background: var(--panel);
+    }
   }
   .logo { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
   .logo-mark {
@@ -1060,7 +1186,7 @@
 
   <form id="new-job">
     <input type="url" id="url-input" placeholder="Paste a song link (Spotify, YouTube…)" required />
-    <button class="primary" type="submit" id="submit-btn">Transcribe →</button>
+    <button class="primary" type="submit" id="submit-btn"><i data-i="plus" class="rail-icon"></i>Transcribe →</button>
     <input type="file" id="file-input" accept=".mp3,.m4a,.aac,.wav,.flac,.ogg,.opus,.webm,.mp4" hidden />
     <button class="text-btn" id="upload-btn" type="button"
             title="Transcribe a local audio file instead of downloading one"><i data-i="upload"></i> Upload audio file…</button>
@@ -1154,6 +1280,11 @@
       </div>
     </div>
   </details>
+
+  <!-- The rail's settings entry, shown only in the collapsed sidebar: it opens
+       the same models panel as a sheet beside the rail, so the sidebar itself
+       never has to expand for it. -->
+  <button id="rail-settings" type="button" title="Transcription models"><i data-i="setting"></i></button>
 </aside>
 
 <main id="main">
@@ -1511,7 +1642,7 @@ function renderLibrary() {
       <button class="track-del" title="Delete"><i data-i="delete"></i></button>`;
     // picking a track is exactly the moment you want to *read* the lyrics, so
     // the floating drawer steps aside instead of covering what you just loaded
-    card.addEventListener("click", () => { selectTrack(t.id); closeSideDrawer(); });
+    card.addEventListener("click", () => { selectTrack(t.id); closeRailSettings(); closeSideDrawer(); });
     card.querySelector(".track-del").addEventListener("click", async (e) => {
       e.stopPropagation();
       const ok = await confirmDialog(`Delete "${t.title}"?`,
@@ -1907,7 +2038,9 @@ function showJobCard({ status, message, candidates, trackId }) {
   jobCardBusy = BUSY_STATUSES.includes(status);
   jobCardLingers = !jobCardBusy && !(status === "notice" && (candidates || []).length);
   card.style.cursor = jobCardBusy ? "default" : "pointer";
-  card.title = jobCardBusy ? "" : "Click to dismiss";
+  // the title doubles as the rail square's status label, where the glyph is all
+  // there is room for
+  card.title = jobCardBusy ? ($("#job-status").textContent || "Working…") : "Click to dismiss";
   armJobCardHide();
 }
 
@@ -3602,7 +3735,7 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") setFullscreenPlayer(false);
     return;
   }
-  if (e.key === "Escape") { closeSideDrawer(); return; }
+  if (e.key === "Escape") { closeRailSettings(); closeSideDrawer(); return; }
   if (e.key === "f" || e.key === "F") {
     if ($("#fs-wrap").style.display !== "none") toggleFullscreenPlayer();
   }
@@ -3637,15 +3770,36 @@ function sideDrawerOpen() {
   return document.body.classList.contains("side-compact")
     && !document.body.classList.contains("side-collapsed");
 }
+// the rail exists in the wide and compact stages only — on a phone `side-collapsed`
+// folds the header instead (see the phone block), so it is not a rail there
+function railShowing() {
+  return document.body.classList.contains("side-collapsed") && sideStage() !== "phone";
+}
 function setSideCollapsed(collapsed) {
   document.body.classList.toggle("side-collapsed", collapsed);
+  if (!collapsed) closeRailSettings();   // the models sheet belongs to the rail
   const btn = $("#side-toggle");
   btn.title = collapsed ? "Show sidebar"
     : document.body.classList.contains("side-compact") ? "Close sidebar" : "Hide sidebar";
   btn.setAttribute("aria-expanded", String(!collapsed));
+  // The collapsed buttons are icon-only squares, so their text has to come from
+  // somewhere: the tooltip carries it.
+  $("#submit-btn").title = railShowing() ? "Add a song — opens the sidebar" : "";
 }
 function closeSideDrawer() {
   if (sideDrawerOpen()) setSideCollapsed(true);
+}
+/* The models sheet, opened from the gear at the foot of the rail. It floats
+   beside the rail (see the rail-settings CSS), so the sidebar never expands for
+   it — the class only ever gets set while the rail is showing. */
+function closeRailSettings() {
+  document.body.classList.remove("rail-settings-open");
+}
+function toggleRailSettings() {
+  const open = !document.body.classList.contains("rail-settings-open");
+  document.body.classList.toggle("rail-settings-open", open);
+  // a <details> shows only its summary when shut, and the sheet *is* that panel
+  if (open) $("#models-panel").open = true;
 }
 function sideStage() {
   if (mqPhone.matches) return "phone";
@@ -3669,6 +3823,7 @@ function syncSideStage() {
   const stage = sideStage();
   if (stage === lastSideStage) return;   // resizing *within* a stage leaves the drawer alone
   lastSideStage = stage;
+  closeRailSettings();   // no rail on a phone, and a new stage resets to its resting state
   sideLayout();
   // the phone stage also decides where the version pill lives
   layoutVersionPills(true);
@@ -3689,7 +3844,18 @@ $("#sidebar .logo").addEventListener("click", (e) => {
   if (e.target.closest("#side-toggle")) return;   // the button handles its own click
   setSideCollapsed(!document.body.classList.contains("side-collapsed"));
 });
-$("#side-scrim").addEventListener("click", closeSideDrawer);
+$("#side-scrim").addEventListener("click", () => { closeRailSettings(); closeSideDrawer(); });
+$("#rail-settings").addEventListener("click", toggleRailSettings);
+/* In the rail the Transcribe button carries a plus instead of its label, so it
+   cannot submit the (empty) form: it is the "add a song" square, and the one
+   control in the rail that brings the sidebar back by itself — with the caret
+   already in the link box, which is the only thing you could want from it. */
+$("#submit-btn").addEventListener("click", (e) => {
+  if (!railShowing()) return;
+  e.preventDefault();
+  setSideCollapsed(false);
+  $("#url-input").focus();
+});
 mqCompactMax.addEventListener("change", syncSideStage);
 mqPhone.addEventListener("change", syncSideStage);
 // the media queries cover it, but a resize listener makes the crossing work even
