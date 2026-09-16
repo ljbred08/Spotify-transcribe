@@ -22,6 +22,17 @@ from app.settings import settings
 
 app = FastAPI(title="Refrain", version="0.1.0")
 
+
+@app.middleware("http")
+async def no_store_html(request, call_next):
+    """The UI is one big HTML file that gets edited in place; without this the
+    static mount lets a browser reuse a heuristic cache entry, so a reload can
+    serve yesterday's interface and make a fix look like it never landed."""
+    resp = await call_next(request)
+    if resp.headers.get("content-type", "").startswith("text/html"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
 
@@ -39,6 +50,8 @@ class LyricEditIn(BaseModel):
     text: str
     # when set, the line is split at this character offset instead of replaced
     splitAt: int | None = None
+    # …or joined onto the line above it (Backspace at the start of a line)
+    mergeWithPrevious: bool = False
 
 
 def _reword(anchor: float, old: list, new_tokens: list) -> list[Word]:
@@ -88,6 +101,34 @@ def _reword(anchor: float, old: list, new_tokens: list) -> list[Word]:
                                  for t in new_tokens[j1:j2])
         # "delete": drop the old words
     return new_words
+
+
+def _merge_lines(lines: list, line_index: int, text: str) -> list:
+    """Join a line onto the one above it — Backspace at the start of a line.
+
+    The exact inverse of a split: the two word lists are concatenated in order,
+    so every word keeps the timing it already had and the join is only a layout
+    change. An empty ``text`` merges nothing but removes the line, which is what
+    Backspace on an empty line does in any text editor.
+    """
+    if line_index <= 0:
+        raise ValueError("the first line has nothing to merge into")
+    line = lines[line_index]
+    tokens = text.split()
+    if tokens:
+        line.words = _reword(line.start, line.words, tokens)
+        line.text = " ".join(w.text for w in line.words)
+    else:
+        # nothing to join on: the line's words go with it. Stored LRC rebuilds
+        # each line's text from its word tags, so leaving them behind would
+        # silently re-appear the text we were asked to drop.
+        line.text = ""
+        line.words = []
+    above = lines[line_index - 1]
+    above.text = f"{above.text} {line.text}".strip()
+    above.words = list(above.words) + list(line.words)
+    del lines[line_index]
+    return lines
 
 
 def _edit_lines(lines: list, line_index: int, text: str) -> list:
@@ -327,7 +368,9 @@ def edit_line(track_id: str, body: LyricEditIn):
     if not 0 <= body.lineIndex < len(lines):
         raise HTTPException(400, "lineIndex out of range")
     try:
-        if body.splitAt is None:
+        if body.mergeWithPrevious:
+            _merge_lines(lines, body.lineIndex, body.text)
+        elif body.splitAt is None:
             _edit_lines(lines, body.lineIndex, body.text)
         else:
             _split_lines(lines, body.lineIndex, body.text, body.splitAt)
@@ -335,6 +378,18 @@ def edit_line(track_id: str, body: LyricEditIn):
         raise HTTPException(400, str(exc))
     version = store.save_edit(track_id, lines)
     return {"version": version, "lines": len(lines)}
+
+
+@app.delete("/api/tracks/{track_id}/versions/{version}")
+def delete_version(track_id: str, version: int):
+    """Delete one stored transcript version (right-click its pill in the UI)."""
+    if not store.get_track(track_id):
+        raise HTTPException(404, "track not found")
+    result = store.delete_version(track_id, version)
+    if "error" in result:
+        code = 404 if "no such" in result["error"] else 400
+        raise HTTPException(code, result["error"])
+    return result
 
 
 @app.get("/api/tracks/{track_id}/audio")
@@ -487,7 +542,7 @@ def update_settings(body: dict):
             "llm_model", "llm_model_ollama", "llm_provider",
             "transcribe_provider", "transcribe_model", "keys",
             "temperature", "top_p", "transcribe_timeout", "show_timestamps",
-            "highlight_style")
+            "highlight_style", "lyric_font_size")
     try:
         out = settings.update(**{k: body[k] for k in keys if k in body})
     except ValueError as exc:

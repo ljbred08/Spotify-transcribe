@@ -357,6 +357,37 @@ class Store:
                 track_id, lines, backend=(active or {}).get("backend"),
                 note="edited", edited=True)
 
+    def delete_version(self, track_id: str, version: int) -> dict:
+        """Remove one transcript version for good.
+
+        Returns ``{"active": n, "versions": [...]}`` on success, or
+        ``{"error": ...}`` — the caller turns that into a status code. The last
+        version is refused: a track with no transcript has nothing to play along
+        with. Deleting the *active* one falls back to the version before it (so
+        dropping an edit returns you to what it was edited from), or to the
+        lowest one left when it was the earliest.
+        """
+        with self._lock:
+            self._migrate_legacy_transcript(track_id)
+            index = self._read_versions_index(track_id)
+            versions = (index or {}).get("versions") or []
+            target = next((v for v in versions if v["version"] == version), None)
+            if target is None:
+                return {"error": "no such version"}
+            if len(versions) <= 1:
+                return {"error": "the only version cannot be deleted"}
+            versions.remove(target)
+            if index.get("active") == version:
+                earlier = [v["version"] for v in versions if v["version"] < version]
+                index["active"] = (max(earlier) if earlier
+                                   else min(v["version"] for v in versions))
+            d = self._transcript_dir(track_id)
+            (d / f"v{version}.lrc").unlink(missing_ok=True)
+            (d / f"v{version}.json").unlink(missing_ok=True)   # legacy storage
+            self._write_versions_index(track_id, index)
+            return {"deleted": version, "active": index["active"],
+                    "versions": [v["version"] for v in versions]}
+
     def _write_version_file(self, track_id: str, version: int,
                             lines: list[Line]) -> None:
         """Write one version's Enhanced LRC (the canonical stored form)."""

@@ -24,6 +24,8 @@ _DEFAULTS = {
     "transcribe_timeout": 180,        # seconds; watchdog for slow models
     "show_timestamps": False,          # mm:ss on each lyric line (UI toggle)
     "highlight_style": "sweep",        # "sweep" (word gradient) | "glow" (whole-word)
+    "lyric_font_size": None,           # px override for the lyric lines; None = the
+                                       # size each layout picks for itself
     # --- block 2 (formatter; only used with transcribe-only models) ----------
     "llm_provider": "ollama",
     "llm_model": "",                   # api model for the formatter provider
@@ -118,6 +120,18 @@ class Settings:
                 if val not in ("sweep", "glow"):
                     raise ValueError("highlight_style must be 'sweep' or 'glow'")
                 self._data["highlight_style"] = val
+            if "lyric_font_size" in fields:
+                val = fields["lyric_font_size"]
+                if val in (None, "", 0, "0"):
+                    self._data["lyric_font_size"] = None   # back to per-layout sizes
+                else:
+                    try:
+                        size = float(val)
+                    except (TypeError, ValueError):
+                        raise ValueError("lyric_font_size must be a number")
+                    if not 12 <= size <= 72:
+                        raise ValueError("lyric_font_size must be between 12 and 72")
+                    self._data["lyric_font_size"] = size
             if "temperature" in fields:
                 try:
                     temp = float(fields["temperature"])

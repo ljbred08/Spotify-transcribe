@@ -109,6 +109,11 @@ button) — useful for A/B-ing models. No re-download of the song.
 Each transcription run creates a **new version** (`v1`, `v2`, …) alongside the previous
 ones — nothing is overwritten, so a worse re-run can simply be rolled back. Version pills
 next to the button switch the active version; every export uses the active version.
+**Right-click the version pill** to delete the one it is showing — handy after a few bad
+re-runs. The last version is refused (a track needs a transcript), and deleting the
+*active* one falls back to the version before it, so dropping an edit returns you to the
+transcript it was edited from. Version numbers are labels rather than a counter, so a
+number freed by a delete can be reused by the next run.
 
 ## Editing a line
 
@@ -120,18 +125,20 @@ fresh transcription — and every later edit writes into that same version. The 
 own version is never touched, so rolling back to the raw transcription is always one
 dropdown away.
 
-**Enter** acts on where the caret is:
+**Enter** and **Backspace** act on where the caret is, and undo each other:
 
-| caret | what Enter does |
-| --- | --- |
-| at the start of the line | nothing |
-| at the end | saves, then carries on at the start of the next line |
-| anywhere between words | splits the line in two there |
+| key | caret | what happens |
+| --- | --- | --- |
+| Enter | at the start of the line | nothing |
+| Enter | at the end | saves, then carries on at the start of the next line |
+| Enter | anywhere between words | splits the line in two there |
+| Backspace | at the start of the line | joins it onto the line above, with a space between |
 
-Splitting is a *layout* change, not a re-timing: the left half keeps the words it had and
-the right half takes the rest, each with its own original timings. A newline in the
-middle of a line (typed, or pasted as the literal two characters `\n`) does exactly what
-Enter there does — it is removed and the line splits.
+Splitting and merging are *layout* changes, not re-timings: a split's left half keeps the
+words it had and the right half takes the rest, and a merge concatenates the two word
+lists — every word keeps its own original timing, so split-then-merge gives the line back
+exactly as it was. A newline in the middle of a line (typed, or pasted as the literal two
+characters `\n`) does exactly what Enter there does — it is removed and the line splits.
 
 ## Never losing a paid transcription
 

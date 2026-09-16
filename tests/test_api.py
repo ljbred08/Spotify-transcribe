@@ -382,6 +382,170 @@ def test_a_split_with_nothing_on_one_side_is_rejected():
         _cleanup_track(track.id)
 
 
+def test_backspace_at_the_start_of_a_line_merges_it_upwards():
+    """The exact inverse of Enter: one line again, with every word's timing."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 1, "text": "second line",
+                                "mergeWithPrevious": True})
+        assert res.status_code == 200
+        assert res.json()["lines"] == 1
+
+        lines = store.load_transcript(track.id)
+        assert len(lines) == 1
+        assert lines[0].text == "hello world second line"
+        # words come across in order, each keeping its own timing
+        assert [(w.text, w.start) for w in lines[0].words] == [
+            ("hello", 1.0), ("world", 1.5), ("second", 3.0), ("line", 3.5)]
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_merge_can_carry_an_edit_to_that_line():
+    """Words typed before pressing Backspace are kept in the merged line."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 1, "text": "SECOND line",
+                          "mergeWithPrevious": True})
+        lines = store.load_transcript(track.id)
+        assert lines[0].text == "hello world SECOND line"
+        assert lines[0].words[2].text == "SECOND"
+        assert lines[0].words[2].start == 3.0      # took the old slot's timing
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_merging_an_emptied_line_just_removes_it():
+    """Backspace on a line the user already emptied drops the line."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 1, "text": "  ",
+                                "mergeWithPrevious": True})
+        assert res.status_code == 200
+        lines = store.load_transcript(track.id)
+        assert [l.text for l in lines] == ["hello world"]
+        assert len(lines[0].words) == 2            # nothing was appended
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_merge_round_trips_with_a_split():
+    """Split then merge gives the original line back, timings intact."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "hello world", "splitAt": 6})
+        assert [l.text for l in store.load_transcript(track.id)][:2] == ["hello",
+                                                                        "world"]
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 1, "text": "world",
+                                "mergeWithPrevious": True})
+        assert res.json()["lines"] == 2            # 3 back down to 2
+        lines = store.load_transcript(track.id)
+        assert [l.text for l in lines] == ["hello world", "second line"]
+        assert [(w.text, w.start) for w in lines[0].words] == [("hello", 1.0),
+                                                               ("world", 1.5)]
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_merging_the_first_line_is_rejected():
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "hello world",
+                                "mergeWithPrevious": True})
+        assert res.status_code == 400
+        assert "nothing to merge" in res.json()["detail"]
+        assert len(store.load_transcript(track.id)) == 2
+        assert len(client.get(f"/api/tracks/{track.id}/versions").json()["versions"]) == 1
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_deleting_a_version_leaves_the_others_alone():
+    from app.pipeline import store
+
+    track = _make_editable_track()   # v1
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "edited one"})   # v2, active
+        from app.models import Line, Word
+        store.save_transcript(track.id, [Line(text="fresh", start=0.0, progress=0.0,
+                                             words=[Word("fresh", 0.0, 0.5)])],
+                              backend="other")                       # v3, active
+        res = client.delete(f"/api/tracks/{track.id}/versions/3")
+        assert res.status_code == 200
+        assert res.json() == {"deleted": 3, "active": 2, "versions": [1, 2]}
+        # the deleted version's file is gone, the others are intact
+        import app.config as cfg
+        d = cfg.DATA_DIR / "transcripts" / track.id
+        assert not (d / "v3.lrc").exists()
+        assert (d / "v1.lrc").exists() and (d / "v2.lrc").exists()
+        # the edit became active again, so its words are what loads
+        assert store.load_transcript(track.id)[0].text == "edited one"
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_deleting_the_active_version_falls_back_to_the_one_before_it():
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "edited one"})     # v2, active
+        body = client.delete(f"/api/tracks/{track.id}/versions/2").json()
+        assert body["active"] == 1                    # back to the model's own
+        assert store.load_transcript(track.id)[0].text == "hello world"
+        # and deleting the earliest of several lands on the lowest that is left.
+        # Numbers are labels, not a counter: the new edit reuses the freed v2.
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "three"})
+        body = client.delete(f"/api/tracks/{track.id}/versions/1").json()
+        assert body["versions"] == [2]
+        assert body["active"] == 2
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_the_last_version_cannot_be_deleted():
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.delete(f"/api/tracks/{track.id}/versions/1")
+        assert res.status_code == 400
+        assert "only version" in res.json()["detail"]
+        assert store.load_transcript(track.id) is not None
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_deleting_an_unknown_version_or_track_404s():
+    track = _make_editable_track()
+    try:
+        assert client.delete(f"/api/tracks/{track.id}/versions/9").status_code == 404
+        assert client.delete("/api/tracks/nope/versions/1").status_code == 404
+        # neither attempt touched anything
+        assert len(client.get(f"/api/tracks/{track.id}/versions").json()["versions"]) == 1
+    finally:
+        _cleanup_track(track.id)
+
+
 def test_a_legacy_edited_version_still_counts_as_edited():
     """Versions written before the flag existed keep being written in place."""
     import json

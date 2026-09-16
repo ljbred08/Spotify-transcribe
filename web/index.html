@@ -19,6 +19,10 @@
     --accent-2: #4ade80;
     --danger: #f87171;
     --radius: 14px;
+    /* lyric size: the lyrics-only override the settings slider writes. Each
+       layout sets its own default below, so leaving it unset keeps the phone,
+       tablet, desktop and full-window sizes as they were. */
+    --lyric-fs: 25px;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html, body { height: 100%; }
@@ -53,15 +57,19 @@
   }
   #side-toggle:hover { color: var(--text); background: var(--panel-2); }
   #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .2s ease; }
-  body.side-collapsed #sidebar {
-    width: 56px; min-width: 56px; padding: 16px 10px; gap: 12px;
-    align-items: center;
+  /* the rail only exists where the sidebar sits beside the content: on phones
+     the sidebar is a header, so `side-collapsed` is deliberately inert there */
+  @media (min-width: 539px) {
+    body.side-collapsed #sidebar {
+      width: 56px; min-width: 56px; padding: 16px 10px; gap: 12px;
+      align-items: center;
+    }
+    body.side-collapsed .logo { flex-direction: column; gap: 12px; padding: 0; }
+    body.side-collapsed .logo-text, body.side-collapsed form#new-job,
+    body.side-collapsed #job-card, body.side-collapsed #library,
+    body.side-collapsed #models-panel { display: none; }
+    body.side-collapsed #side-toggle .ip-icon { transform: rotate(180deg); }
   }
-  body.side-collapsed .logo { flex-direction: column; gap: 12px; padding: 0; }
-  body.side-collapsed .logo-text, body.side-collapsed form#new-job,
-  body.side-collapsed #job-card, body.side-collapsed #library,
-  body.side-collapsed #models-panel { display: none; }
-  body.side-collapsed #side-toggle .ip-icon { transform: rotate(180deg); }
   .logo { display: flex; align-items: center; gap: 10px; padding: 2px 6px; }
   .logo-mark {
     width: 34px; height: 34px; border-radius: 10px;
@@ -138,6 +146,7 @@
   #job-card.closing { animation: jobcard-out 160ms ease both; }
   @media (prefers-reduced-motion: reduce) {
     #job-card.opening, #job-card.closing { animation-duration: 1ms; }
+    body.side-compact #sidebar { animation-duration: 1ms; }
   }
   #job-card .status-row { display: flex; align-items: center; gap: 8px; }
   .spinner {
@@ -186,17 +195,25 @@
   }
   #job-cands .cand-more:hover { color: var(--text); border-color: var(--accent); }
   /* right-click menu on a cover (hero or library card) */
-  #art-menu {
+  #art-menu, .ctx-menu {
     position: fixed; z-index: 200; min-width: 178px; padding: 4px;
     background: var(--panel-2); border: 1px solid var(--line);
     border-radius: 10px; box-shadow: 0 12px 28px rgba(2, 4, 8, .5);
   }
-  #art-menu button {
+  #art-menu button, .ctx-menu button {
     display: block; width: 100%; text-align: left; background: none;
     border: 0; border-radius: 7px; padding: 6px 8px; font: inherit;
     font-size: 12px; color: var(--text); cursor: pointer;
   }
-  #art-menu button:hover { background: var(--panel); color: var(--accent); }
+  #art-menu button:hover, .ctx-menu button:hover {
+    background: var(--panel); color: var(--accent);
+  }
+  #art-menu button:disabled, .ctx-menu button:disabled {
+    color: var(--muted); cursor: default;
+  }
+  #art-menu button:disabled:hover, .ctx-menu button:disabled:hover {
+    background: none; color: var(--muted);
+  }
   #job-msg { color: var(--muted); margin-top: 6px; font-size: 12px; line-height: 1.4; }
 
   #library { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
@@ -422,11 +439,17 @@
   #track-artist + .meta-input { margin-top: 4px; }
   #hero-badges { display: flex; gap: 8px; margin-top: 12px; }
   .badge {
-    font-size: 11px; font-weight: 600;
+    font-size: 11px; font-weight: 600; flex: none;
     border: 1px solid var(--line); color: var(--muted);
     padding: 3px 10px; border-radius: 999px;
   }
-  .badge.green { color: var(--accent); border-color: rgba(30,215,96,.35); }
+  /* The version pill normally shares the transport row, but that row has to hold
+     the picker, Re-transcribe and (for omni transcripts) Post-processing first,
+     so on a narrower window the pill ends up drawn on top of Post-processing.
+     layoutVersionPills() moves it UP into this row when that happens: same line
+     as the line count, right-aligned, with the width to itself. The badge is
+     flex:none above so the pill can never squeeze the line count instead. */
+  #hero-badges #version-pills { max-width: 100%; margin-left: auto; }
 
   #wave-wrap { padding: 0 44px; }
   #waveform {
@@ -471,6 +494,10 @@
     border-radius: 8px; padding: 6px 9px; font-size: 12px; font-weight: 600; cursor: pointer;
   }
   .speed-btn.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
+  /* the same four speeds behind one icon: only shown in the compact stage, where
+     the inline row would squeeze the transport */
+  #speed-wrap { display: none; }
+  .pp-menu.speed-menu { min-width: 108px; }
   /* view-options gear + dropdown in the controls row (same pattern as pp-menu) */
   .view-wrap { margin-left: 10px; }
   .view-menu { min-width: 250px; padding: 6px 0; }
@@ -480,6 +507,17 @@
   }
   .view-opt:hover { background: rgba(30,215,96,.08); }
   .view-opt input[type="checkbox"] { accent-color: var(--accent); cursor: pointer; }
+  .fs-ctl { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+  /* The speeds get a row in the settings menu exactly while the full-window
+     player is on: that mode hides the transport's speed controls, and the
+     settings menu is the one piece of the transport still there to open. */
+  .view-opt.fs-speeds { display: none; }
+  body.fs-player .view-opt.fs-speeds { display: flex; }
+  #lyric-fs { width: 92px; accent-color: var(--accent); cursor: pointer; }
+  #lyric-fs-val {
+    font-size: 11.5px; font-weight: 700; color: var(--muted);
+    min-width: 32px; text-align: right;
+  }
   #inst-thresh {
     background: var(--panel); border: 1px solid var(--line); color: var(--text);
     border-radius: 8px; padding: 4px 6px; font-size: 12px; font-weight: 600;
@@ -518,6 +556,11 @@
   #version-pills {
     display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end;
     min-width: 0; max-width: 46vw;
+    /* pinned to the LAST track explicitly: when the post-processing button is
+       hidden (the common case) auto-placement would drop this into the empty
+       max-content track, which is only as wide as its own pill, so it could
+       never reach the right edge no matter what alignment it asked for */
+    grid-column: 4; justify-self: end;
   }
   .ver-pill {
     border: 1px solid var(--line); background: var(--panel); color: var(--muted);
@@ -525,17 +568,38 @@
     white-space: nowrap; max-width: 200px; overflow: hidden; text-overflow: ellipsis;
   }
   .ver-pill:hover { border-color: #2f3950; color: var(--text); }
-  /* many versions: the active pill becomes a <select> with the same look */
-  select.ver-select {
-    appearance: none; -webkit-appearance: none;
+  /* The version control looks and reads exactly like the <select> it replaced —
+     same pill, same caret, same list — but it is ours, because the rows inside
+     the list have to carry their own actions: "right-click THIS version and
+     delete it" is impossible with a native option list, which is the browser's
+     own popup and swallows every event we might attach. */
+  .ver-select {
+    appearance: none; -webkit-appearance: none; font: inherit; font-size: 11px;
     border: 1px solid rgba(30,215,96,.4); background: rgba(30,215,96,.07);
     color: var(--accent); border-radius: 999px; padding: 3px 22px 3px 10px;
-    font-size: 11px; cursor: pointer; max-width: 240px;
+    cursor: pointer; max-width: 240px; white-space: nowrap;
+    overflow: hidden; text-overflow: ellipsis;
     background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='6'><path d='M0 0l4 6 4-6z' fill='%231ed760'/></svg>");
     background-repeat: no-repeat; background-position: right 8px center;
   }
-  select.ver-select:hover { filter: brightness(1.2); }
-  select.ver-select option { color: var(--text); background: var(--panel-2); }
+  .ver-select:hover { filter: brightness(1.2); }
+  .ver-select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .pp-menu.ver-menu { min-width: 264px; max-width: 420px; max-height: 46vh; overflow-y: auto; }
+  /* a row is a plain container holding the label and a delete button — one
+     <button> can't be nested inside another, and the delete needs its own
+     click target anyway */
+  .pp-menu.ver-menu .ver-opt { display: flex; align-items: center; }
+  .pp-menu.ver-menu .ver-opt:hover { background: rgba(30,215,96,.06); }
+  .pp-menu.ver-menu .ver-opt button:hover { background: none; }   /* the row is the surface */
+  .pp-menu.ver-menu .ver-opt-pick { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .pp-menu.ver-menu .ver-opt.active .ver-opt-pick { color: var(--accent); }
+  .pp-menu.ver-menu .ver-opt-del {
+    flex: none; width: 32px; padding: 0; display: grid; place-items: center;
+    align-self: stretch; color: var(--muted);
+  }
+  .pp-menu.ver-menu .ver-opt-del:hover { color: var(--danger); }
+  .pp-menu.ver-menu .ver-opt-del:disabled { opacity: .3; cursor: default; }
+  .ver-opt-del .ip-icon { width: 14px; height: 14px; }
   .ver-pill.active { color: var(--accent); border-color: rgba(30,215,96,.4); background: rgba(30,215,96,.07); }
   /* match-accuracy badge on sync-improved pills: green = high agreement
      with the reference transcription, amber = suspiciously low */
@@ -552,6 +616,15 @@
     box-shadow: 0 10px 28px rgba(0,0,0,.45);
   }
   .pp-menu.open { display: block; }
+  /* Flipped above the button when there is no room below, and centred on it when
+     it would otherwise hang off an edge — the full-window transport is a narrow
+     pill near the bottom of the screen, so its menus opened off the bottom and
+     off the left. --pop-shift nudges a centred menu back inside the viewport. */
+  .pp-menu.drop-up { top: auto; bottom: calc(100% + 6px); }
+  .pp-menu.centred {
+    left: 50%; right: auto;
+    transform: translateX(calc(-50% + var(--pop-shift, 0px)));
+  }
   .pp-menu button {
     display: block; width: 100%; text-align: left; background: none;
     border: none; color: var(--text); padding: 9px 12px; font-size: 12.5px;
@@ -574,6 +647,22 @@
   .modal h3 { font-size: 15px; margin-bottom: 4px; }
   .modal .modal-sub { color: var(--muted); font-size: 12px; line-height: 1.55; margin-bottom: 10px; }
   .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
+
+  /* ---------- in-app confirm ----------
+     window.confirm() cannot be used here: in the desktop webview it returns
+     false without ever showing a dialog, so both delete actions looked like
+     they did nothing at all. A native dialog can't be styled, tested, or
+     trusted in a webview, so yes/no lives in the page. */
+  #confirm-overlay {
+    display: none; position: fixed; inset: 0; z-index: 300;
+    background: rgba(5,8,14,.72); align-items: center; justify-content: center;
+    padding: 16px;
+  }
+  #confirm-overlay.open { display: flex; }
+  .confirm-modal { width: 430px; }
+  .confirm-modal h3 { margin-bottom: 6px; }
+  .text-btn.danger { color: var(--danger); border-color: rgba(248,113,113,.4); }
+  .text-btn.danger:hover { background: rgba(248,113,113,.1); border-color: var(--danger); }
 
   .export-btn {
     background: var(--panel); color: var(--text);
@@ -599,7 +688,7 @@
   }
   .lyric-line {
     position: relative;      /* anchors the optional right-aligned timestamp */
-    font-size: 25px; font-weight: 700; letter-spacing: -0.02em;
+    font-size: var(--lyric-fs); font-weight: 700; letter-spacing: -0.02em;
     color: #3d4557;
     padding: 9px 0;
     cursor: pointer;
@@ -691,29 +780,22 @@
      pixels off the circle used to land on the wrapper's dead corners (rounded
      corners aren't part of the button's hit area) and do nothing at all. The
      padding makes the whole box forgiving; the button itself stays 40px. */
-  #fs-wrap {
-    position: fixed; right: 8px; bottom: 8px; z-index: 9999;
-    padding: 6px; pointer-events: auto; cursor: pointer;
-    line-height: 0;
-  }
-  #fs-btn {
-    background: var(--panel); color: var(--muted);
-    border: 1px solid var(--line); border-radius: 999px;
-    width: 40px; height: 40px; cursor: pointer;
-    display: grid; place-items: center;
-    transition: color .15s, border-color .15s, transform .06s;
-    opacity: .65;
-    padding: 0;
-  }
-  #fs-wrap:hover #fs-btn { color: var(--text); border-color: #2f3950; opacity: 1; }
-  #fs-btn:active { transform: scale(.94); }
-  #fs-btn .ip-icon { width: 16px; height: 16px; }
+  /* The full-window toggle sits in the transport row with the other controls
+     (see the markup comment). Deliberately no `position: fixed`, no `opacity`
+     and no transition: an opaque fixed layer can be composited at a stale
+     offset, which is how this button came to look present and never receive a
+     click. In flow it paints and hit-tests exactly like its siblings. */
+  #fs-wrap { display: flex; line-height: 0; }
+  /* No accent treatment while the full-window player is on: an active-looking
+     toggle competed with the gear beside it, so it stays a plain control. The
+     icon size is left to the shared .speed-btn rule so the two controls in the
+     floating transport can be scaled together below. */
   #main:only-child { display: flex; }
   body.fs-player #sidebar { display: none; }
   body.fs-player #main { position: fixed; inset: 0; z-index: 80; height: 100vh; background: var(--bg); }
-  body.fs-player #fs-wrap { z-index: 9999; }
+
   body.fs-player #hero, body.fs-player #retrans-row, body.fs-player #export-row,
-  body.fs-player #wave-wrap, body.fs-player .speed-group,
+  body.fs-player #wave-wrap, body.fs-player .speed-group, body.fs-player #speed-wrap,
   body.fs-player #skip-start-btn, body.fs-player #skip-end-btn,
   body.fs-player #rew-btn, body.fs-player #fwd-btn { display: none; }
   /* floating transport: centered at the bottom, above the lyrics */
@@ -729,12 +811,88 @@
     display: flex; flex-direction: column; align-items: center;
     text-align: center;
   }
-  body.fs-player .lyric-line { font-size: 28px; transform-origin: center; }
+  body.fs-player { --lyric-fs: 28px; }
+  /* the gear leads in this mode so that play sits in the middle of the pill:
+     everything after it (settings, full-window exit) is roughly the same width
+     as itself, so the transport reads as gear | play | exit */
+  body.fs-player .view-wrap { order: -1; }
+  /* Larger glyphs in here WITHOUT a larger transport: each box is pinned to the
+     size it has in the normal transport (32×26 for the icon buttons — the 14px
+     icon plus its 6/9 padding — and 52×52 for play), so growing the icon inside
+     can no longer inflate the pill. Play's glyph is scaled by the same amount as
+     the icons (14 → 17px, so 19 → 23px), which keeps it exactly as much bigger
+     than them as it is elsewhere. Change the two icon numbers to taste. */
+  body.fs-player .speed-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    box-sizing: border-box; width: 32px; height: 26px; padding: 0;
+  }
+  body.fs-player .speed-btn .ip-icon { width: 17px; height: 17px; }
+  /* Play's icon is an SVG sized as a percentage of the button (52% = 27px), so
+     font-size does not touch it — and the SVG sits on the text baseline, which
+     is what `line-height` was silently nudging off centre. Flex centring removes
+     the baseline from the equation, and 66% (≈33px) is the bigger triangle. */
+  body.fs-player #play-btn {
+    display: inline-flex; align-items: center; justify-content: center;
+  }
+  body.fs-player #play-btn .ip-icon { width: 66%; height: 66%; }
+  body.fs-player .lyric-line { transform-origin: center; }
   body.fs-player .lyric-line.active { transform: scale(1.04); }
 
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: #232a3a; border-radius: 99px; border: 2px solid var(--bg); }
   ::-webkit-scrollbar-track { background: transparent; }
+
+  /* ---------- compact: the sidebar FLOATS over the page ----------
+     Between the full desktop layout and the phone one (539–821px) there is no
+     room for a 300px sidebar plus readable lyrics, so the sidebar behaves like
+     a drawer: it auto-collapses to the rail, and opening it slides a panel over
+     the content instead of squeezing it. #side-scrim catches the click that
+     dismisses it; the rail itself stays in flow, so the page never reflows.
+     821 is one below the widest window the full 340px sidebar still reads
+     comfortably in, so widening past it returns the sidebar to the flow on its
+     own. */
+  #side-scrim {
+    display: none; position: fixed; inset: 0; z-index: 120;
+    background: rgba(4, 7, 12, .5); backdrop-filter: blur(1px);
+    opacity: 1;   /* resting state is dimmed; the animation only fades *in* to it */
+  }
+  @media (min-width: 539px) and (max-width: 821px) {
+    /* Rests as the rail (`.side-collapsed`, set automatically on entering this
+       stage); opening it lifts the panel out of the flow and over the content.
+       The arrow direction still comes from the collapsed class alone: pointing
+       inward while open, outward while in the rail. */
+    body.side-compact:not(.side-collapsed) #sidebar {
+      position: fixed; left: 0; top: 0; bottom: 0; height: 100vh;
+      width: 320px; min-width: 0; max-width: 86vw; z-index: 130;
+      border-right: 1px solid var(--line);
+      box-shadow: 0 24px 60px rgba(2, 4, 8, .6);
+      animation: side-in 180ms ease-out;
+    }
+    body.side-compact:not(.side-collapsed) #side-scrim { display: block; }
+    /* the whole rail is a tap target for opening it, not just the chevron */
+    body.side-compact .logo { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    /* a fixed drawer leaves the flow, which would yank the content 56px to the
+       left on open and back on close: hold the rail's footprint open instead,
+       so the page under the drawer never moves */
+    body.side-compact:not(.side-collapsed) #main { margin-left: 56px; }
+    /* the speed row folds into the icon here (see #speed-wrap in the controls) */
+    .speed-group { display: none; }
+    #speed-wrap { display: block; margin-left: auto; }
+    /* the drawer covers the rail, so its own toggle must read as "close" */
+    body.side-compact:not(.side-collapsed) #side-toggle {
+      color: var(--text); background: var(--panel-2);
+    }
+  }
+  /* Entrance animations deliberately carry a TRANSFORM only. An opacity
+     keyframe plus `both` makes the panel's first frame transparent, so any
+     environment where the animation never advances (a stalled compositor, an
+     animation-disabled setting) would leave an invisible drawer. As written, a
+     stalled animation costs a few pixels of offset and nothing else, and the
+     scrim's dim is its resting style rather than a fade. */
+  @keyframes side-in { from { transform: translateX(-12px); } to { transform: none; } }
+  /* the phone sheet drops in from above instead of sliding in from the left */
+  @keyframes side-down { from { transform: translateY(-14px); } to { transform: none; } }
+
 
   /* ---------- tablet: same desktop layout, slimmer sidebar ---------- */
   @media (max-width: 1023px) {
@@ -744,19 +902,68 @@
     #hero-meta h2 { font-size: 25px; }
     #wave-wrap, #controls, #retrans-row, #lyrics { padding-left: 28px; padding-right: 28px; }
     #export-row { top: 14px; right: 28px; }
-    .lyric-line { font-size: 22px; }
+    :root { --lyric-fs: 22px; }
+    .lyric-line { font-size: var(--lyric-fs); }
   }
 
-  /* ---------- phone / narrow ---------- */
-  @media (max-width: 640px) {
+  /* ---------- phone / narrow ----------
+     538 is a calibrated number, not a round one: it is the width the phone
+     layout is judged to start at, so the drawer stage gets every pixel above
+     it. Both this boundary and the `min-width` above must move together, and
+     both must stay in step with the JS stage queries at the bottom of the file. */
+  @media (max-width: 538px) {
     body { flex-direction: column; height: auto; min-height: 100%; }
-    /* sidebar is a plain compact header at the top of the page: the WHOLE
-       document scrolls as one, so controls scroll out of the way too */
+    /* With a track open a phone takes desktop's shape: the viewport is locked
+       and #lyrics becomes the only scroller, so the header and transport stay
+       put while the words move under them. That is also what the lyrics
+       autoscroll needs — it calls scrollTo on #lyrics, which did nothing while
+       the whole document was the scroller, leaving the first line pinned
+       against the top edge and eaten by the mask. Without a track there is
+       nothing to bound, so the blank page keeps scrolling as one document. */
+    body.has-track { height: 100vh; height: 100dvh; overflow: hidden; }
+    /* sidebar is a plain compact header at the top of the page */
     #sidebar {
       width: 100%; height: auto; max-height: none;
       border-right: none; border-bottom: 1px solid var(--line); flex: none;
-      padding: 12px 14px; gap: 10px;
+      padding: 10px 12px; gap: 8px;
     }
+    /* A phone header is chrome, not a masthead: the mark and the type shrink so
+       that the panel it hides costs as little screen as possible. The row is
+       also the tap target for the panel (see the .logo listener) — a 14px
+       chevron is a fiddly hit on a phone — so it uses the full width. */
+    .logo { padding: 0; gap: 7px; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+    /* the mark's font-size is what sizes the glyph inside it (.ip-icon is 1em),
+       so it shrinks with the box instead of crowding a smaller square */
+    .logo-mark { width: 24px; height: 24px; border-radius: 7px; font-size: 13px; }
+    .logo h1 { font-size: 14px; }
+    .logo span { font-size: 10px; }
+    /* folding leaves just that row, so it gets even tighter */
+    body.side-collapsed #sidebar { padding: 5px 12px; gap: 0; }
+    body.side-collapsed form#new-job, body.side-collapsed #job-card,
+    body.side-collapsed #library, body.side-collapsed #models-panel { display: none; }
+    /* With a track open the header FLOATS, the same idea as the compact drawer:
+       `.side-compact` is the "this stage floats" marker, set by JS and
+       deliberately absent while nothing is loaded (see sideFloats()) — with an
+       empty player the panel IS the page, so it stays in the flow and unfolds.
+       Floating lifts it over the content instead of pushing the lyrics down,
+       and the scrim behind it takes the click that dismisses it. */
+    body.side-compact:not(.side-collapsed) #sidebar {
+      position: fixed; left: 0; right: 0; top: 0; bottom: auto;
+      width: 100%; max-width: none; height: auto; max-height: 86vh;
+      overflow-y: auto; z-index: 130;
+      border-bottom: 1px solid var(--line);
+      box-shadow: 0 24px 60px rgba(2, 4, 8, .6);
+      animation: side-down 180ms ease-out;
+    }
+    body.side-compact:not(.side-collapsed) #side-scrim { display: block; }
+    /* the sheet covers the header it belongs to, so its own toggle reads "close" */
+    body.side-compact:not(.side-collapsed) #side-toggle {
+      color: var(--text); background: var(--panel-2);
+    }
+    /* the arrow follows the direction it folds: up when open, down when folded
+       (the icon is a double-left chevron, so these are quarter turns of it) */
+    #side-toggle .ip-icon { transform: rotate(90deg); }
+    body.side-collapsed #side-toggle .ip-icon { transform: rotate(-90deg); }
     /* library becomes a horizontal swipe shelf: peek implies more tracks */
     #library { flex: none; overflow: visible; }
     #library h2 { padding: 2px 2px 6px; }
@@ -771,15 +978,18 @@
       -webkit-tap-highlight-color: transparent;
     }
     .track-del { opacity: 1; }   /* no hover on touch */
-  #fs-wrap { bottom: 4px; right: 4px; }
     #models-panel { flex: none; }
     #models-panel[open] { max-height: 55vh; overflow-y: auto; }
 
-    /* the page itself is the scroll container on phones: undo the desktop
-       viewport lock or the lyrics are unreachable */
+    /* blank page: plain document flow, nothing to bound */
     #main { height: auto; flex: none; overflow: visible; }
     #player { min-height: 0; }
     #lyrics { flex: none; overflow: visible; }
+    /* with a track open: the desktop structure, phone-sized — #main does not
+       scroll, #lyrics does */
+    body.has-track #main { flex: 1 1 auto; height: auto; min-height: 0; overflow: hidden; }
+    body.has-track #player { min-height: 0; }
+    body.has-track #lyrics { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
     #hero, #wave-wrap, #controls, #retrans-row { padding-left: 16px; padding-right: 16px; }
     #export-row { top: 10px; right: 16px; }
     #hero { padding-top: 16px; gap: 12px; }
@@ -787,29 +997,47 @@
     #hero-meta h2 { font-size: 20px; }
     #hero-meta p { font-size: 13px; }
     #hero-badges { margin-top: 8px; gap: 6px; flex-wrap: wrap; }
-    /* pills always get their own full row under the picker + button */
     #retrans-row { display: flex; flex-wrap: wrap; padding-bottom: 8px; }
-    #version-pills { flex: 1 1 100%; justify-content: flex-start; max-width: none; }
+    /* On a phone the pill always rides with the line count, never in the
+       transport row: that row already wraps, so a fourth control there only
+       crowds it or pushes the pill off the edge, and it reads better beside the
+       other hero metadata. layoutVersionPills() does the moving; `flex: 0 1
+       auto` keeps it shrinkable and `flex-wrap: wrap` on #hero-badges lets a
+       long label take a line of its own, still right-aligned. */
+    #version-pills { flex: 0 1 auto; justify-content: flex-end; }
     #waveform { height: 56px; }
     #controls { flex-wrap: wrap; gap: 10px; padding-top: 12px; }
     /* speeds take their own centered row instead of squeezing the transport */
-    .speed-group { width: 100%; justify-content: center; margin-left: 0; order: 3; }
+    /* the four speeds fold into the speedometer icon here too (same swap as the
+       compact stage): a row of numbers under an already-wrapping transport
+       crowds it, and the icon carries the rate in its colour instead */
+    .speed-group { display: none; }
+    #speed-wrap { display: block; margin-left: auto; }
     .speed-btn { padding: 9px 12px; }
-    .lyric-line { font-size: 18px; padding: 8px 0; }
-    #lyrics { padding: 18px 16px 80px; }
+    :root { --lyric-fs: 18px; }
+    .lyric-line { padding: 8px 0; }
+    /* #lyrics masks its own top 7% and bottom 12%, so the first line has to
+       start past that faded band: otherwise it reads as a ghost of a line that
+       already played rather than as the line you are about to hear */
+    #lyrics { padding: 40px 16px 90px; }
     .export-btn { padding: 9px 14px; font-size: 12px; }
     /* >=16px on form controls so iOS Safari doesn't zoom-on-focus */
     #url-input, #re-model, #inst-thresh, .backend-row select, .backend-row input[type="text"] { font-size: 16px; }
   }
+  /* after the phone block on purpose: its `animation` shorthand would otherwise
+     reset the duration this sets */
+  @media (prefers-reduced-motion: reduce) and (max-width: 538px) {
+    body.side-compact:not(.side-collapsed) #sidebar { animation-duration: 1ms; }
+  }
 </style>
 </head>
 <body>
-
+<div id="side-scrim"></div>
 <aside id="sidebar">
   <div class="logo">
     <div class="logo-mark"><i data-i="music"></i></div>
     <div class="logo-text"><h1>Refrain</h1><span>song → synced transcript</span></div>
-    <button id="side-toggle" type="button" title="Hide sidebar">
+    <button id="side-toggle" type="button" title="Hide sidebar" aria-expanded="true">
       <i data-i="double-left"></i>
     </button>
   </div>
@@ -930,7 +1158,6 @@
         <p id="track-artist" title="Double-click to edit">—</p>
         <input class="meta-input" id="artist-input" spellcheck="false" placeholder="Add an artist…" />
         <div id="hero-badges">
-          <span class="badge green" id="badge-backend">transcribed</span>
           <span class="badge" id="badge-lines">0 lines</span>
         </div>
       </div>
@@ -940,12 +1167,18 @@
       <select id="re-model" title="Model for the next re-transcription"></select>
       <button class="text-btn" id="re-btn" title="Re-run transcription on the existing audio; the current version is kept"><i data-i="refresh"></i> Re-transcribe</button>
       <div class="pp-wrap" id="pp-wrap" style="display:none">
-        <button class="text-btn" id="pp-btn" title="Post-processing tools (omni-model transcripts only)"><i data-i="timer"></i> Post-processing <i data-i="down-c" class="caret"></i></button>
+        <button class="text-btn" id="pp-btn" title="Post-processing tools (omni-model transcripts only)">Post-processing <i data-i="down-c" class="caret"></i></button>
         <div class="pp-menu" id="pp-menu">
           <button id="pp-improve-sync" title="Re-time this transcript using a transcription-only model's measured timestamps"><i data-i="timer"></i> Improve sync…</button>
         </div>
       </div>
-      <span id="version-pills"></span>
+      <span id="version-pills">
+        <div class="pp-wrap" id="ver-wrap" style="display:none">
+          <button class="ver-select" id="ver-btn" type="button"
+                  aria-haspopup="listbox" aria-expanded="false"></button>
+          <div class="pp-menu ver-menu" id="ver-menu"></div>
+        </div>
+      </span>
     </div>
 
     <div id="wave-wrap">
@@ -960,6 +1193,10 @@
       <button class="ctrl-btn" id="fwd-btn" title="Forward 5s (→)"><i data-i="double-right"></i></button>
       <button class="ctrl-btn" id="skip-end-btn" title="Skip to end (End)"><i data-i="go-end"></i></button>
       <div class="speed-group" id="speed-group"></div>
+      <div class="pp-wrap" id="speed-wrap">
+        <button class="speed-btn" id="speed-toggle" title="Playback speed"><i data-i="speed-one"></i></button>
+        <div class="pp-menu speed-menu" id="speed-menu"></div>
+      </div>
       <div class="pp-wrap view-wrap">
         <button class="speed-btn" id="view-btn" title="View options: line timestamps, instrumental breaks"><i data-i="setting"></i></button>
         <div class="pp-menu view-menu" id="view-menu">
@@ -974,6 +1211,16 @@
               <option value="glow">Word by word</option>
             </select>
           </label>
+          <label class="view-opt fs-speeds">Playback speed
+            <span class="fs-ctl" id="fs-speed-group"></span>
+          </label>
+          <label class="view-opt" for="lyric-fs">Lyrics size
+            <span class="fs-ctl">
+              <input type="range" id="lyric-fs" min="14" max="44" step="1" value="25"
+                     title="Lyrics font size — only the lyrics change" />
+              <span id="lyric-fs-val">25px</span>
+            </span>
+          </label>
           <label class="view-opt">Instrumental breaks
             <select id="inst-thresh" title="Detect instrumental breaks longer than this; clicking a divider jumps past it">
               <option value="0">no breaks</option>
@@ -985,11 +1232,20 @@
           </label>
         </div>
       </div>
+      <!-- The full-window toggle lives here, in the transport with the other
+           controls, rather than as its own fixed overlay in the corner. There it
+           was reported as unreachable by the mouse over and over: nothing painted
+           above it and it was topmost in the hit test, yet a recorded mouse never
+           once landed inside its box — every click landed roughly 30px above-left
+           of it, on the lyrics. As a fixed layer with `opacity`, its painted
+           position could drift from its hit box; as part of this row it paints
+           and hits exactly like the buttons that have always worked. -->
+      <div id="fs-wrap" style="display:none"><button class="speed-btn" id="fs-btn" type="button" title="Full-window player (F)"><i data-i="full-screen-one"></i></button></div>
     </div>
 
     <div id="export-row">
       <div class="pp-wrap">
-        <button class="export-btn" id="dl-btn"><i data-i="download"></i> Download <i data-i="down-c" class="caret"></i></button>
+        <button class="export-btn" id="dl-btn"><i data-i="download"></i> Download</button>
         <div class="pp-menu dl-menu" id="dl-menu">
           <button data-fmt="mp3" title="MP3: the audio with title/artist/album, cover art, and the lyrics embedded (word-level SYLT + plain lyrics + Enhanced LRC)"><i data-i="music"></i> MP3 · audio + lyrics</button>
           <button data-fmt="lrc" title="Plain LRC: one [mm:ss.xx] tag per line"><i data-i="download"></i> LRC</button>
@@ -1008,7 +1264,17 @@
   <audio id="audio" preload="auto"></audio>
 </main>
 
-<div id="fs-wrap" style="display:none"><button id="fs-btn" type="button" title="Full-window player (F)"><i data-i="full-screen-one"></i></button></div>
+
+<div id="confirm-overlay">
+  <div class="modal confirm-modal">
+    <h3 id="confirm-title"></h3>
+    <p class="modal-sub" id="confirm-body"></p>
+    <div class="modal-actions">
+      <button class="text-btn" id="confirm-cancel" type="button">Cancel</button>
+      <button class="text-btn danger" id="confirm-ok" type="button">Delete</button>
+    </div>
+  </div>
+</div>
 
 <div id="modal-overlay">
   <div class="modal">
@@ -1063,12 +1329,22 @@ function iconSvg(name) {
 }
 function hydrateIcons(root) {
   (root || document).querySelectorAll("i[data-i]").forEach((el) => {
-    el.innerHTML = iconSvg(el.dataset.i);
+    const svg = iconSvg(el.dataset.i);
+    // keep `data-i` when the lookup fails: either the name isn't in the vendored
+    // set, or the set hasn't arrived yet (library cards can render first) and the
+    // pass that runs when it lands will pick this element up. Dropping the marker
+    // on a miss is how icon buttons end up as silent empty circles forever.
+    if (!svg) return;
+    el.innerHTML = svg;
     el.removeAttribute("data-i");
   });
 }
 function setIcon(el, name) { if (el) el.innerHTML = iconSvg(name); }
-fetch("vendor/iconpark.json").then((r) => r.json()).then((data) => {
+// the whole IconPark Outline collection, vendored — see vendor/README.md for the
+// source and licence. ?v= is bumped whenever that file changes: the browser
+// caches it hard, and a stale copy silently hydrates new names to nothing (an
+// empty button rather than a wrong icon, which is a lot harder to notice)
+fetch("vendor/iconpark.json?v=3").then((r) => r.json()).then((data) => {
   window._ICON_SVGS = data.icons || {};
   if (window.Iconify) Iconify.addCollection(data);
   hydrateIcons();
@@ -1217,12 +1493,16 @@ function renderLibrary() {
         <div class="track-artist">${escapeHtml(t.artist)}${t.hasTranscript ? "" : " · no transcript"}</div>
       </div>
       <button class="track-del" title="Delete"><i data-i="delete"></i></button>`;
-    card.addEventListener("click", () => selectTrack(t.id));
+    // picking a track is exactly the moment you want to *read* the lyrics, so
+    // the floating drawer steps aside instead of covering what you just loaded
+    card.addEventListener("click", () => { selectTrack(t.id); closeSideDrawer(); });
     card.querySelector(".track-del").addEventListener("click", async (e) => {
       e.stopPropagation();
-      if (!confirm(`Delete "${t.title}" and its files?`)) return;
+      const ok = await confirmDialog(`Delete "${t.title}"?`,
+        "The track goes with it: its audio and every stored transcript version.");
+      if (!ok) return;
       await fetch(`/api/tracks/${t.id}`, { method: "DELETE" });
-      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; $("#fs-wrap").style.display = "none"; }
+      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; $("#fs-wrap").style.display = "none"; document.body.classList.remove("has-track"); sideTrackChanged(); }
       refreshLibrary();
     });
     card.querySelector(".track-art").addEventListener("contextmenu", (e) => {
@@ -1278,36 +1558,52 @@ async function fetchMetadataFor(trackId, { pick = false } = {}) {
    be permanent. Right-clicking any cover — hero or library card — opens this
    menu, and the redo deliberately always returns the picker (never an automatic
    match), since the whole point is to replace a cover already on screen. */
-let artMenuEl = null;
+let ctxMenuEl = null;
 
-function onArtMenuKey(e) {
-  if (e.key === "Escape") closeArtMenu();
+function onCtxMenuKey(e) {
+  if (e.key === "Escape") closeCtxMenu();
 }
 
-function closeArtMenu() {
-  if (!artMenuEl) return;
-  artMenuEl.remove();
-  artMenuEl = null;
-  document.removeEventListener("click", closeArtMenu, true);
-  document.removeEventListener("keydown", onArtMenuKey, true);
-  window.removeEventListener("scroll", closeArtMenu, true);
-  window.removeEventListener("blur", closeArtMenu, true);
+function closeCtxMenu() {
+  if (!ctxMenuEl) return;
+  ctxMenuEl.remove();
+  ctxMenuEl = null;
+  document.removeEventListener("click", closeCtxMenu, true);
+  document.removeEventListener("keydown", onCtxMenuKey, true);
+  window.removeEventListener("scroll", closeCtxMenu, true);
+  window.removeEventListener("blur", closeCtxMenu, true);
 }
 
-function showArtMenu(x, y, trackId, hasArt) {
-  closeArtMenu();
+/* One right-click menu for the whole app: covers and version pills both open
+   this, so positioning and dismissal behave identically everywhere. */
+function openCtxMenu(x, y, items, id) {
+  closeCtxMenu();
   const menu = document.createElement("div");
-  menu.id = "art-menu";
-  const item = document.createElement("button");
-  item.type = "button";
-  item.textContent = hasArt ? "Redo metadata search…" : "Fetch metadata";
-  item.addEventListener("click", () => {
-    closeArtMenu();
-    redoMetadataSearch(trackId);
-  });
-  menu.appendChild(item);
+  menu.id = id;
+  menu.className = "ctx-menu";
+  for (const spec of items) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.textContent = spec.label;
+    if (spec.disabled) btn.disabled = true;
+    if (spec.title) btn.title = spec.title;
+    btn.addEventListener("click", () => {
+      if (spec.disabled) return;
+      closeCtxMenu();
+      spec.onClick();
+    });
+    menu.appendChild(btn);
+  }
   menu.style.left = `${x}px`;
   menu.style.top = `${y}px`;
+  // the menu opens under the cursor, i.e. on top of the thing it came from, so a
+  // right-click "on the pill again" lands here instead: swallow it and dismiss,
+  // leaving the pill uncovered for the next right-click
+  menu.addEventListener("contextmenu", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    closeCtxMenu();
+  });
   document.body.appendChild(menu);
 
   // keep it inside the window
@@ -1315,14 +1611,21 @@ function showArtMenu(x, y, trackId, hasArt) {
   if (box.right > window.innerWidth - 8) menu.style.left = `${Math.max(8, x - box.width)}px`;
   if (box.bottom > window.innerHeight - 8) menu.style.top = `${Math.max(8, y - box.height)}px`;
 
-  artMenuEl = menu;
+  ctxMenuEl = menu;
   // deferred, so the click that opened the menu doesn't immediately close it
   setTimeout(() => {
-    document.addEventListener("click", closeArtMenu, true);
-    document.addEventListener("keydown", onArtMenuKey, true);
-    window.addEventListener("scroll", closeArtMenu, true);
-    window.addEventListener("blur", closeArtMenu, true);
+    document.addEventListener("click", closeCtxMenu, true);
+    document.addEventListener("keydown", onCtxMenuKey, true);
+    window.addEventListener("scroll", closeCtxMenu, true);
+    window.addEventListener("blur", closeCtxMenu, true);
   }, 0);
+}
+
+function showArtMenu(x, y, trackId, hasArt) {
+  openCtxMenu(x, y, [{
+    label: hasArt ? "Redo metadata search…" : "Fetch metadata",
+    onClick: () => redoMetadataSearch(trackId),
+  }], "art-menu");
 }
 
 async function redoMetadataSearch(trackId) {
@@ -1766,15 +2069,171 @@ async function loadRetransModels() {
   } catch { /* models panel has the error handling */ }
 }
 
+/* Yes/no in the page instead of window.confirm(). Resolves true on confirm,
+   false on Cancel, Escape or a click on the backdrop. Cancel takes focus, so an
+   accidental Enter can't delete anything. */
+function confirmDialog(title, body, okLabel = "Delete") {
+  const overlay = $("#confirm-overlay");
+  const ok = $("#confirm-ok");
+  const cancel = $("#confirm-cancel");
+  return new Promise((resolve) => {
+    $("#confirm-title").textContent = title;
+    $("#confirm-body").textContent = body;
+    ok.textContent = okLabel;
+    const done = (answer) => {
+      overlay.classList.remove("open");
+      ok.removeEventListener("click", onOk);
+      cancel.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onBackdrop);
+      document.removeEventListener("keydown", onKey, true);
+      resolve(answer);
+    };
+    const onOk = () => done(true);
+    const onCancel = () => done(false);
+    const onBackdrop = (e) => { if (e.target === overlay) done(false); };
+    // capture, and stopped here, so Escape doesn't also close the drawer or
+    // leave the full-window player while this is asking
+    const onKey = (e) => { if (e.key === "Escape") { e.stopPropagation(); done(false); } };
+    ok.addEventListener("click", onOk);
+    cancel.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onBackdrop);
+    document.addEventListener("keydown", onKey, true);
+    overlay.classList.add("open");
+    cancel.focus();
+  });
+}
+
+/* ---------------- the version dropdown ----------------
+   `verState` is what the closed pill is showing, so right-clicking the *pill*
+   (rather than a row in the open list) still knows which version it means. */
+let verState = { trackId: null, versions: [], active: null };
+
+/* only one popover open at a time, version list included. Going through here
+   (rather than removing `.open` directly) keeps the version pill's
+   aria-expanded honest whichever way its list got shut. */
+function closePopovers(except) {
+  document.querySelectorAll(".pp-menu.open").forEach((m) => {
+    if (m === except) return;
+    m.classList.remove("open");
+    resetPopover(m);
+    if (m.id === "ver-menu") $("#ver-btn").setAttribute("aria-expanded", "false");
+  });
+}
+function resetPopover(menu) {
+  menu.classList.remove("drop-up", "centred");
+  menu.style.removeProperty("--pop-shift");
+}
+/* Menus hang below their button and align to its right edge. Both assumptions
+   break in the full-window player, where the transport is a narrow pill sitting
+   at the bottom of the screen: there the menu has to open upwards, and to be
+   centred on its button (then nudged back in) rather than extending left off the
+   edge. Decided by measurement, so it is not special-cased to that mode. */
+function placePopover(menu) {
+  if (!menu || !menu.classList.contains("open")) return;
+  resetPopover(menu);
+  const box = menu.getBoundingClientRect();
+  if (box.bottom > innerHeight - 8) menu.classList.add("drop-up");
+  const margin = 8;
+  if (box.left < margin || box.right > innerWidth - margin) {
+    menu.classList.add("centred");
+    const c = menu.getBoundingClientRect();
+    const shift = Math.max(margin - c.left, 0) - Math.max(c.right - (innerWidth - margin), 0);
+    if (shift) menu.style.setProperty("--pop-shift", `${Math.round(shift)}px`);
+  }
+}
+function closeVerMenu() {
+  $("#ver-menu").classList.remove("open");
+  $("#ver-btn").setAttribute("aria-expanded", "false");
+}
+
+$("#ver-btn").addEventListener("click", (e) => {
+  e.stopPropagation();
+  const wasOpen = $("#ver-menu").classList.contains("open");
+  closePopovers();                 // this list included, so a second click shuts it
+  if (!wasOpen) { $("#ver-menu").classList.add("open"); placePopover($("#ver-menu")); }
+  $("#ver-btn").setAttribute("aria-expanded", String(!wasOpen));
+});
+// the pill itself is a version too: right-click it and the dialog names it
+$("#ver-btn").addEventListener("contextmenu", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  const v = verState.versions.find((x) => x.version === verState.active);
+  if (v) deleteVersion(verState.trackId, v.version, verState.versions.length);
+});
+$("#ver-btn").addEventListener("keydown", (e) => {
+  if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+    e.preventDefault();
+    const v = verState.versions.find((x) => x.version === verState.active);
+    if (v) deleteVersion(verState.trackId, v.version, verState.versions.length);
+  }
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeVerMenu(); });
+
+/* Right-click a version — in the list or on the closed pill — and it offers to
+   delete *that* version, with no menu in between (the thing you clicked already
+   names it). The dialog is in-app because window.confirm() is a no-op in the
+   desktop webview, which is why deletion used to do nothing at all. */
+async function deleteVersion(trackId, version, total) {
+  if (total <= 1) {
+    showJobCard({ status: "notice",
+                  message: "The only version can't be deleted — a track needs a transcript." });
+    return;
+  }
+  const ok = await confirmDialog(`Delete v${version}?`,
+    "Its stored transcript goes away for good; the other versions are untouched.");
+  if (!ok) return;
+  const res = await fetch(`/api/tracks/${trackId}/versions/${version}`,
+                          { method: "DELETE" });
+  if (!res.ok) {
+    const detail = (await res.json().catch(() => ({}))).detail;
+    showJobCard({ status: "error", message: detail || "Could not delete that version" });
+    return;
+  }
+  const data = await res.json().catch(() => ({}));
+  await selectTrack(trackId);   // reloads both the lines and the version list
+  showJobCard({ status: "done",
+                message: `Deleted v${version}`
+                         + (data.active ? ` — now showing v${data.active}` : "") });
+}
+
+/* The version pill shares its row with the picker, Re-transcribe and (for omni
+   transcripts) Post-processing. When the row is too narrow to hold all of them
+   the pill overlaps the last control before it, so it moves up to the badges row
+   instead — right-aligned, on the same line as the line count.
+   Measured rather than guessed: the pill is put back into its row to see where it
+   would land, and is lifted only if it would actually collide with the control
+   before it. */
+let pillRowWidth = -1;   // the row width this decision was last made for
+function layoutVersionPills(force) {
+  const row = $("#retrans-row"), pills = $("#version-pills"), badges = $("#hero-badges");
+  if (!row || !pills || !badges) return;
+  if (!force && row.clientWidth === pillRowWidth) return;   // nothing to re-decide
+  pillRowWidth = row.clientWidth;
+  row.appendChild(pills);                     // measure it in its own row first
+  const gap = parseFloat(getComputedStyle(row).columnGap) || 0;
+  const prev = [...row.children]
+    .filter((el) => el !== pills && getComputedStyle(el).display !== "none").pop();
+  const box = pills.getBoundingClientRect();
+  const ctrl = prev ? prev.getBoundingClientRect() : null;
+  // the phone row WRAPS, leaving the pill on a line of its own: that is not an
+  // overlap, however the two x axes happen to fall
+  const sameLine = !!ctrl && Math.abs(box.top - ctrl.top) < Math.min(box.height, ctrl.height) / 2;
+  // on a phone it goes up unconditionally: the row is already wrapping there and
+  // the pill belongs with the rest of the hero metadata
+  const lift = mqPhone.matches || (sameLine && box.left < ctrl.right + gap - 1);
+  if (lift) badges.appendChild(pills);
+  pills.classList.toggle("lifted", lift);
+}
+// any width change — the window, the sidebar collapsing, a stage crossing — can
+// change whether the pill still fits, and this also makes the first call on load
+if (window.ResizeObserver) new ResizeObserver(() => layoutVersionPills()).observe($("#retrans-row"));
+
 async function loadVersions(trackId) {
-  const wrap = $("#version-pills");
-  wrap.innerHTML = "";
   try {
     const res = await fetch(`/api/tracks/${trackId}/versions`);
-    if (!res.ok) return;
+    if (!res.ok) { $("#ver-wrap").style.display = "none"; return; }
     const idx = await res.json();
-    const versions = idx.versions || [];
-    const pillLabel = (v) =>
+    const versions = idx.versions || [];    const pillLabel = (v) =>
       `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`
       + (v.edited ? " · edited" : "")
       + (v.note && v.note.startsWith("sync improved") ? " · sync" : "")
@@ -1787,30 +2246,76 @@ async function loadVersions(trackId) {
          : "")
       + (v.lines ? ` — ${v.lines} lines` : "");
 
-    // ALWAYS one pill-shaped dropdown (same green styling as the old pills):
-    // even two pills overflow the row's minmax(0,1fr) track, truncating the
-    // last pill's text — a fixed-width select can never wrap or overlap.
-    const sel = document.createElement("select");
-    sel.className = "ver-select";
-    sel.title = "Choose transcript version";
+    // The closed pill: the active version's label, same as the <select> showed
+    closeVerMenu();
+    $("#ver-wrap").style.display = "";
+    verState = { trackId, versions, active: idx.active };
+    const shown = versions.find((v) => v.version === idx.active);
+    const verBtn = $("#ver-btn");
+    verBtn.textContent = shown ? pillLabel(shown) : "no versions";
+    verBtn.title = "Choose transcript version"
+      + "\nClick to open the list · right-click to delete " +
+      (shown ? `v${shown.version}` : "this version");
+
+    // ...and the list behind it: one real row per version, each with its own
+    // left-click (switch to it) and right-click (delete it)
+    const verMenu = $("#ver-menu");
+    verMenu.innerHTML = "";
+    const offerDelete = (v) => {
+      closeVerMenu();
+      deleteVersion(trackId, v.version, versions.length);
+    };
     for (const v of versions) {
-      const o = document.createElement("option");
-      o.value = String(v.version);
-      o.textContent = pillLabel(v);
-      o.title = pillTitle(v);
-      if (v.version === idx.active) o.selected = true;
-      sel.appendChild(o);
+      const row = document.createElement("div");
+      row.className = "ver-opt" + (v.version === idx.active ? " active" : "");
+      row.title = (v.version === idx.active ? "(active) " : "") + pillTitle(v)
+        + (versions.length > 1
+           ? "\nClick to switch to this version · right-click to delete it"
+           : "\nThe only version can't be deleted \u2014 a track needs a transcript");
+
+      const pick = document.createElement("button");
+      pick.type = "button";
+      pick.className = "ver-opt-pick";
+      pick.textContent = pillLabel(v);
+      pick.addEventListener("click", async () => {
+        closeVerMenu();
+        if (v.version === idx.active) return;
+        await fetch(`/api/tracks/${trackId}/versions/${v.version}/activate`, { method: "POST" });
+        selectTrack(trackId);
+      });
+
+      // the bin at the end of the row: same action as right-clicking the row
+      const bin = document.createElement("button");
+      bin.type = "button";
+      bin.className = "ver-opt-del";
+      bin.disabled = versions.length <= 1;
+      bin.setAttribute("aria-label", `Delete v${v.version}`);
+      bin.title = versions.length <= 1
+        ? "The only version can't be deleted \u2014 a track needs a transcript"
+        : `Delete v${v.version}`;
+      bin.innerHTML = '<i data-i="delete"></i>';
+      bin.addEventListener("click", (e) => { e.stopPropagation(); offerDelete(v); });
+
+      row.append(pick, bin);
+      row.addEventListener("contextmenu", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        offerDelete(v);
+      });
+      // the keyboard equivalent of a right-click (menu key / Shift+F10), which
+      // also fires when the focused button inside the row bubbles up here
+      row.addEventListener("keydown", (e) => {
+        if (e.key === "ContextMenu" || (e.shiftKey && e.key === "F10")) {
+          e.preventDefault();
+          offerDelete(v);
+        }
+      });
+      hydrateIcons(row);
+      verMenu.appendChild(row);
     }
-    sel.addEventListener("change", async () => {
-      await fetch(`/api/tracks/${trackId}/versions/${sel.value}/activate`, { method: "POST" });
-      selectTrack(trackId);
-    });
-    wrap.appendChild(sel);
+
 
     const activeV = versions.find((v) => v.version === idx.active);
-    const badge = document.getElementById("badge-backend");
-    if (activeV && badge)
-      badge.textContent = activeV.backend ? `via ${activeV.backend.split(":").pop()}` : "transcribed";
     if (activeV)
       $("#badge-lines").textContent = `${activeV.lines ?? currentData.lines.length} lines`;
     const reBtn = $("#re-btn");
@@ -1823,16 +2328,21 @@ async function loadVersions(trackId) {
       : null;
     $("#pp-wrap").style.display = activeKind && activeKind.kind === "audio_llm" ? "" : "none";
   } catch { /* non-fatal */ }
+  // the label just changed (and Post-processing may have appeared), which can
+  // change whether the pill still fits its row
+  layoutVersionPills(true);
 }
 
 async function selectTrack(trackId) {
   currentTrack = trackId;
+  sideTrackChanged();
   renderLibrary();
   const res = await fetch(`/api/tracks/${trackId}`);
   if (!res.ok) return;
   currentData = await res.json();
   $("#empty").style.display = "none";
   $("#player").style.display = "flex";
+  document.body.classList.add("has-track");   // phone: lock the layout around the lyrics
   $("#fs-wrap").style.display = "";
   $("#track-title").textContent = currentData.title;
   $("#track-artist").textContent = currentData.artist || "—";
@@ -1841,7 +2351,6 @@ async function selectTrack(trackId) {
   $("#track-artist").title = currentData.artist
     ? "Double-click to edit artist" : "Double-click to add an artist";
   $("#badge-lines").textContent = `${currentData.lines.length} lines`;
-  $("#badge-backend").textContent = "transcribed";
   if (currentData.lines.length) {
     audio.src = currentData.audioUrl;
   }
@@ -1950,13 +2459,14 @@ function startLineEdit(idx, div, e, caretAt, initial) {
     div.classList.remove("editing");
     if (wasActive) div.classList.add("active");
     if (mode === false) { buildLyrics(); return false; }
-    const text = mode === "split" ? value : value.trim();
-    if (mode !== "split" && (!text || text === line.text)) {
+    const text = mode === "save" ? value.trim() : value;
+    if (mode === "save" && (!text || text === line.text)) {
       buildLyrics();   // nothing to store — don't add a save for no change
       return true;
     }
     const body = { lineIndex: idx, text };
     if (mode === "split") body.splitAt = caret;
+    if (mode === "merge") body.mergeWithPrevious = true;
     const res = await fetch(`/api/tracks/${currentTrack}/edit_line`, {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1973,7 +2483,10 @@ function startLineEdit(idx, div, e, caretAt, initial) {
     currentData.lines = fresh.lines;
     buildLyrics();
     loadVersions(currentTrack);   // edits live in one version — show its state
-    for (const i of (mode === "split" ? [idx, idx + 1] : [idx])) {
+    const flashed = mode === "split" ? [idx, idx + 1]
+                  : mode === "merge" ? [idx - 1, idx]
+                  : [idx];
+    for (const i of flashed) {
       const node = lineNodes[i];
       if (node) {   // small save acknowledgment
         node.classList.add("save-flash");
@@ -2000,10 +2513,24 @@ function startLineEdit(idx, div, e, caretAt, initial) {
     if (await finish("split", caret)) editNextLine();   // the rest is now a new line
   };
 
+  // Backspace at the very start of a line undoes what Enter did there: the line
+  // is joined onto the one above, and the caret lands where the two met.
+  const mergeIntoPrevious = async () => {
+    if (idx === 0) return;                    // nothing above the first line
+    const aboveText = currentData.lines[idx - 1].text;
+    if (!(await finish("merge")) ) return;
+    const node = lineNodes[idx - 1];
+    if (node) startLineEdit(idx - 1, node, null, aboveText.length + 1);
+  };
+
   const onKey = (e) => {
     if (e.key === "Enter") {
       e.preventDefault();
       enterAt(inp.selectionStart ?? inp.value.length);
+    } else if (e.key === "Backspace" && (inp.selectionStart ?? 0) === 0
+               && inp.selectionEnd === 0) {
+      e.preventDefault();
+      mergeIntoPrevious();
     } else if (e.key === "Escape") {
       e.preventDefault();
       finish(false);
@@ -2313,6 +2840,58 @@ $("#hl-style").addEventListener("change", (e) => {
   putSettings({ highlight_style: highlightStyle });
 });
 
+/* Lyrics font size. An absolute px override written as an inline custom property
+   on the body, so it beats every layout's own default — including full-window
+   mode's 28px — or null to leave each layout to pick (phone 18, tablet 22,
+   desktop 25). The slider therefore starts at whatever the current layout is
+   actually using: it reads the rendered line instead of assuming 25 is right
+   everywhere. Nothing but the lyrics reads the variable. */
+let lyricFontSize = null;             // px, or null = each layout's own size
+
+function renderedLyricSize() {
+  const line = document.querySelector(".lyric-line");
+  if (line) return Math.round(parseFloat(getComputedStyle(line).fontSize)) || 25;
+  return Math.round(parseFloat(
+    getComputedStyle(document.documentElement).getPropertyValue("--lyric-fs"))) || 25;
+}
+function syncLyricSlider() {
+  const slider = $("#lyric-fs");
+  if (!slider) return;
+  slider.value = String(lyricFontSize || renderedLyricSize());
+  const shown = $("#lyric-fs-val");
+  shown.textContent = `${slider.value}px` + (lyricFontSize ? "" : " · auto");
+  shown.title = lyricFontSize
+    ? `${lyricFontSize}px everywhere — drag back to this layout's own size to follow it again`
+    : `Following the layout (${renderedLyricSize()}px here); drag to pin a size instead`;
+}
+function applyLyricFontSize(size, persist) {
+  const wanted = Number.isFinite(size)
+    ? Math.min(44, Math.max(14, Math.round(size))) : null;
+  document.body.style.removeProperty("--lyric-fs");   // read the layout's own size
+  const layoutSize = renderedLyricSize();
+  // sitting exactly on the layout's size means "no override" rather than pinning
+  // it: that is the only way back to phone 18 / tablet 22 / desktop 25 / full 28
+  lyricFontSize = wanted && wanted !== layoutSize ? wanted : null;
+  if (lyricFontSize) document.body.style.setProperty("--lyric-fs", `${lyricFontSize}px`);
+  syncLyricSlider();
+  if (persist) putSettings({ lyric_font_size: lyricFontSize });
+}
+// the stored setting is applied when settings finish loading, which can be a
+// second after first paint: a size the user has already dragged wins over it
+let lyricFontTouched = false;
+$("#lyric-fs").addEventListener("input", (e) => {
+  lyricFontTouched = true;
+  applyLyricFontSize(+e.target.value, false);
+});
+$("#lyric-fs").addEventListener("change", (e) => applyLyricFontSize(+e.target.value, true));
+// with no override the slider follows the layout as the window changes size
+let lyricSliderTimer = 0;
+window.addEventListener("resize", () => {
+  if (lyricFontSize) return;
+  clearTimeout(lyricSliderTimer);
+  lyricSliderTimer = setTimeout(syncLyricSlider, 150);
+});
+
 /* waveform repaints on a timer, not the animation frame */
 setInterval(() => { if (peaks && currentData) drawWaveProgress(); }, 250);
 
@@ -2425,26 +3004,51 @@ document.addEventListener("keydown", (e) => {
   }
 });
 
+/* ---------------- playback speed ----------------
+   The four rates live in two places — the inline row (wide windows) and the menu
+   behind the timer icon (the compact stage) — so one array feeds both and one
+   function keeps every button's `.active` state in step. */
 const speeds = [0.75, 1, 1.25, 1.5];
-const sg = $("#speed-group");
-speeds.forEach((s) => {
+const speedBtns = [];
+function applySpeed(s) {
+  audio.playbackRate = s;
+  speedBtns.forEach(({ btn, rate }) => btn.classList.toggle("active", rate === s));
+  const toggle = $("#speed-toggle");
+  // the icon alone can't show the rate, so a non-default speed colours it
+  toggle.classList.toggle("active", s !== 1);
+  toggle.title = `Playback speed (${s}×)`;
+}
+function addSpeedButton(container, s) {
   const b = document.createElement("button");
-  b.className = "speed-btn" + (s === 1 ? " active" : "");
+  b.className = "speed-btn";
   b.textContent = `${s}×`;
+  b.title = `Play at ${s}×`;
   b.addEventListener("click", () => {
-    audio.playbackRate = s;
-    sg.querySelectorAll(".speed-btn").forEach((x) => x.classList.remove("active"));
-    b.classList.add("active");
+    applySpeed(s);
+    closePopovers();   // whichever menu this button lives in, picking closes it
   });
-  sg.appendChild(b);
+  container.appendChild(b);
+  speedBtns.push({ btn: b, rate: s });
+}
+speeds.forEach((s) => addSpeedButton($("#speed-group"), s));
+speeds.forEach((s) => addSpeedButton($("#speed-menu"), s));
+// ...and into the settings menu, where they stand in for the hidden transport
+// controls while the full-window player is on
+speeds.forEach((s) => addSpeedButton($("#fs-speed-group"), s));
+applySpeed(1);
+$("#speed-toggle").addEventListener("click", (e) => {
+  e.stopPropagation();
+  closePopovers($("#speed-menu"));
+  $("#speed-menu").classList.toggle("open");
+  placePopover($("#speed-menu"));
 });
 
 /* ---------------- exports ---------------- */
 $("#dl-btn").addEventListener("click", (e) => {
   e.stopPropagation();
+  closePopovers($("#dl-menu"));
   $("#dl-menu").classList.toggle("open");
-  $("#pp-menu").classList.remove("open");
-  $("#view-menu").classList.remove("open");
+  placePopover($("#dl-menu"));
 });
 document.querySelectorAll("#dl-menu button[data-fmt]").forEach((btn) => {
   btn.addEventListener("click", () => {
@@ -2669,6 +3273,8 @@ function renderConfig(data) {
   }
   $("#show-ts-toggle").checked = showTimestamps;
   applyHighlightStyle(s.highlight_style || highlightStyle);
+  const storedFs = Number(s.lyric_font_size);
+  if (!lyricFontTouched) applyLyricFontSize(storedFs > 0 ? storedFs : null, false);
   // --- block 1: transcription ---
   fillProviderSelect($("#t-provider"), "transcribe", s.transcribe_provider);
   const tProv = $("#t-provider").value || "gemini";
@@ -2861,18 +3467,18 @@ $("#llm-discover").addEventListener("click", async () => {
 /* ---------------- post-processing ---------------- */
 $("#pp-btn").addEventListener("click", (e) => {
   e.stopPropagation();
+  closePopovers($("#pp-menu"));
   $("#pp-menu").classList.toggle("open");
-  $("#view-menu").classList.remove("open");
-  $("#dl-menu").classList.remove("open");
+  placePopover($("#pp-menu"));
 });
 $("#view-btn").addEventListener("click", (e) => {
   e.stopPropagation();
+  closePopovers($("#view-menu"));
   $("#view-menu").classList.toggle("open");
-  $("#pp-menu").classList.remove("open");
+  placePopover($("#view-menu"));
 });
 document.addEventListener("click", (e) => {
-  if (!e.target.closest(".pp-wrap"))
-    document.querySelectorAll(".pp-menu.open").forEach((m) => m.classList.remove("open"));
+  if (!e.target.closest(".pp-wrap")) closePopovers();
 });
 
 /* --- improve-sync modal --- */
@@ -2893,7 +3499,7 @@ function renderIsModal() {
 }
 
 function openIsModal() {
-  $("#pp-menu").classList.remove("open");
+  closePopovers();
   if (!modelsData) { refreshModels().then(() => renderIsModal()); }
   else renderIsModal();
   $("#modal-overlay").classList.add("open");
@@ -2980,16 +3586,93 @@ document.addEventListener("keydown", (e) => {
     if (e.key === "Escape") setFullscreenPlayer(false);
     return;
   }
+  if (e.key === "Escape") { closeSideDrawer(); return; }
   if (e.key === "f" || e.key === "F") {
     if ($("#fs-wrap").style.display !== "none") toggleFullscreenPlayer();
   }
 })
 
-/* ---------------- sidebar collapse ---------------- */
+/* ---------------- sidebar: three layout stages ----------------
+   wide    (> 821px)   sits in the flow beside the content; collapsing it to the
+                       rail is the user's own call
+   compact (539–821px) there is no room for 340px of sidebar plus readable
+                       lyrics, so it rests in the rail and opening it floats over
+                       the content as a drawer — the page never reflows for it
+   phone   (<= 538px)  a header above the player that folds to a horizontal logo
+                       row and opens as a floating sheet — except on load with
+                       no track open, where the panel is the page and stays in
+                       the flow
+   Crossing into a stage resets to that stage's resting state. That is what makes
+   a narrow window feel automatic instead of leaving you to re-close a drawer you
+   opened at the old size; `change` fires only on a boundary crossing, so a drawer
+   the user opened stays open while they drag the window around inside the stage. */
+// keep the query here in step with the `compact:` media query in the stylesheet
+const mqCompact = window.matchMedia("(min-width: 539px) and (max-width: 821px)");
+const mqPhone = window.matchMedia("(max-width: 538px)");
+
+// true only while a compact-stage sidebar is open as a floating drawer
+function sideDrawerOpen() {
+  return document.body.classList.contains("side-compact")
+    && !document.body.classList.contains("side-collapsed");
+}
+function setSideCollapsed(collapsed) {
+  document.body.classList.toggle("side-collapsed", collapsed);
+  const btn = $("#side-toggle");
+  btn.title = collapsed ? "Show sidebar"
+    : document.body.classList.contains("side-compact") ? "Close sidebar" : "Hide sidebar";
+  btn.setAttribute("aria-expanded", String(!collapsed));
+}
+function closeSideDrawer() {
+  if (sideDrawerOpen()) setSideCollapsed(true);
+}
+function sideStage() {
+  return mqPhone.matches ? "phone" : mqCompact.matches ? "compact" : "wide";
+}
+// "floats" = this stage keeps the panel out of the flow once it opens. Compact
+// always does. Phone does it only with a track open, because on a phone with
+// nothing loaded the panel *is* the page: it starts open and in the flow (the
+// one case that is neither folded nor floating), then steps aside for lyrics.
+function sideLayout() {
+  const stage = sideStage();
+  const floats = stage === "compact" || (stage === "phone" && !!currentTrack);
+  document.body.classList.toggle("side-compact", floats);   // floating style on/off
+  if (floats) setSideCollapsed(true);              // rest folded, over nothing
+  else if (stage === "phone") setSideCollapsed(false);   // blank page: panel open
+  // wide is left alone: collapsing it is the user's call, so a track opening
+  // must not unfold a sidebar they put away themselves
+}
+let lastSideStage = null;   // "wide" | "compact" | "phone", the last one applied
+function syncSideStage() {
+  const stage = sideStage();
+  if (stage === lastSideStage) return;   // resizing *within* a stage leaves the drawer alone
+  lastSideStage = stage;
+  sideLayout();
+  // the phone stage also decides where the version pill lives
+  layoutVersionPills(true);
+}
+// only the phone stage's resting state depends on whether a track is open
+function sideTrackChanged() {
+  if (sideStage() === "phone") sideLayout();
+}
 $("#side-toggle").addEventListener("click", () => {
-  const collapsed = document.body.classList.toggle("side-collapsed");
-  $("#side-toggle").title = collapsed ? "Show sidebar" : "Hide sidebar";
+  setSideCollapsed(!document.body.classList.contains("side-collapsed"));
 });
+// On the foldable stages the whole logo row toggles the panel, not just the
+// chevron: a 14px icon is a fiddly target on a phone, and the row is the obvious
+// thing to tap. Wide is left alone — there the sidebar is a masthead and
+// clicking the brand should do nothing.
+$("#sidebar .logo").addEventListener("click", (e) => {
+  if (sideStage() === "wide") return;
+  if (e.target.closest("#side-toggle")) return;   // the button handles its own click
+  setSideCollapsed(!document.body.classList.contains("side-collapsed"));
+});
+$("#side-scrim").addEventListener("click", closeSideDrawer);
+mqCompact.addEventListener("change", syncSideStage);
+mqPhone.addEventListener("change", syncSideStage);
+// the media queries cover it, but a resize listener makes the crossing work even
+// if a `change` event is missed (and is a no-op inside a stage either way)
+window.addEventListener("resize", syncSideStage);
+syncSideStage();
 
 /* ---------------- boot ---------------- */
 refreshLibrary();
