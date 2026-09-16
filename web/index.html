@@ -57,9 +57,14 @@
   }
   #side-toggle:hover { color: var(--text); background: var(--panel-2); }
   #side-toggle .ip-icon { width: 14px; height: 14px; transition: transform .2s ease; }
-  /* the rail only exists where the sidebar sits beside the content: on phones
-     the sidebar is a header, so `side-collapsed` is deliberately inert there */
-  @media (min-width: 539px) {
+  /* The rail only exists where the sidebar sits beside the content: on phones the
+     sidebar is a header, so `side-collapsed` is deliberately inert there. This is
+     written as the *exact complement* of the phone query rather than as
+     `min-width: 539px` — those two leave the interval (538, 539) matching neither,
+     which is not hypothetical: a 942-device-pixel pane at dpr 1.75 is 538.2857 CSS
+     px wide, and both blocks dropped out there, so every rule in this file fell
+     back to the desktop defaults and the full-size sidebar flashed up mid-drag. */
+  @media not all and (max-width: 538px) {
     body.side-collapsed #sidebar {
       width: 56px; min-width: 56px; padding: 16px 10px; gap: 12px;
       align-items: center;
@@ -856,7 +861,11 @@
     background: rgba(4, 7, 12, .5); backdrop-filter: blur(1px);
     opacity: 1;   /* resting state is dimmed; the animation only fades *in* to it */
   }
-  @media (min-width: 539px) and (max-width: 821px) {
+  /* Complement of the phone query again, for the same no-gap reason (see the rail
+     block above). Every rule here is `side-compact`-scoped or is scoped below, and
+     the JS only sets that class in the compact and phone stages, so dropping the
+     old `max-width: 821px` bound cannot leak this into the wide layout. */
+  @media not all and (max-width: 538px) {
     /* Rests as the rail (`.side-collapsed`, set automatically on entering this
        stage); opening it lifts the panel out of the flow and over the content.
        The arrow direction still comes from the collapsed class alone: pointing
@@ -875,9 +884,12 @@
        left on open and back on close: hold the rail's footprint open instead,
        so the page under the drawer never moves */
     body.side-compact:not(.side-collapsed) #main { margin-left: 56px; }
-    /* the speed row folds into the icon here (see #speed-wrap in the controls) */
-    .speed-group { display: none; }
-    #speed-wrap { display: block; margin-left: auto; }
+    /* the speed row folds into the icon here (see #speed-wrap in the controls).
+       Scoped to `side-compact` because this block is no longer bounded on the
+       right: that class is JS's marker for "this stage folds the transport", and
+       the wide stage has to keep its inline row. */
+    body.side-compact .speed-group { display: none; }
+    body.side-compact #speed-wrap { display: block; margin-left: auto; }
     /* the drawer covers the rail, so its own toggle must read as "close" */
     body.side-compact:not(.side-collapsed) #side-toggle {
       color: var(--text); background: var(--panel-2);
@@ -981,8 +993,12 @@
     #models-panel { flex: none; }
     #models-panel[open] { max-height: 55vh; overflow-y: auto; }
 
-    /* blank page: plain document flow, nothing to bound */
-    #main { height: auto; flex: none; overflow: visible; }
+    /* blank page: plain document flow, nothing to bound. `margin-left: 0` undoes
+       the compact block's rail-width margin, which now also matches here (the
+       sheet sets `side-compact` too): every other rule in that block is overridden
+       by the id-level `#sidebar`/`#main` rules below, but nothing else pins this
+       one, and the phone sheet floats, so the page beneath it must not move. */
+    #main { height: auto; flex: none; overflow: visible; margin-left: 0; }
     #player { min-height: 0; }
     #lyrics { flex: none; overflow: visible; }
     /* with a track open: the desktop structure, phone-sized — #main does not
@@ -3605,9 +3621,15 @@ document.addEventListener("keydown", (e) => {
    Crossing into a stage resets to that stage's resting state. That is what makes
    a narrow window feel automatic instead of leaving you to re-close a drawer you
    opened at the old size; `change` fires only on a boundary crossing, so a drawer
-   the user opened stays open while they drag the window around inside the stage. */
-// keep the query here in step with the `compact:` media query in the stylesheet
-const mqCompact = window.matchMedia("(min-width: 539px) and (max-width: 821px)");
+   the user opened stays open while they drag the window around inside the stage.
+
+   The stage is derived as "phone, else compact, else wide" rather than as two
+   bounded ranges, because a viewport can be 538.2857 CSS px wide (a 942-device-px
+   pane at dpr 1.75 is exactly that) and a `max-width: 538` / `min-width: 539` pair
+   matches NEITHER there — the CSS fell through to the desktop defaults and the
+   full-size sidebar flashed up mid-drag, and this function reported "wide" with
+   it. Deriving it from one boundary keeps JS and the stylesheet gapless together. */
+const mqCompactMax = window.matchMedia("(max-width: 821px)");
 const mqPhone = window.matchMedia("(max-width: 538px)");
 
 // true only while a compact-stage sidebar is open as a floating drawer
@@ -3626,7 +3648,8 @@ function closeSideDrawer() {
   if (sideDrawerOpen()) setSideCollapsed(true);
 }
 function sideStage() {
-  return mqPhone.matches ? "phone" : mqCompact.matches ? "compact" : "wide";
+  if (mqPhone.matches) return "phone";
+  return mqCompactMax.matches ? "compact" : "wide";
 }
 // "floats" = this stage keeps the panel out of the flow once it opens. Compact
 // always does. Phone does it only with a track open, because on a phone with
@@ -3667,7 +3690,7 @@ $("#sidebar .logo").addEventListener("click", (e) => {
   setSideCollapsed(!document.body.classList.contains("side-collapsed"));
 });
 $("#side-scrim").addEventListener("click", closeSideDrawer);
-mqCompact.addEventListener("change", syncSideStage);
+mqCompactMax.addEventListener("change", syncSideStage);
 mqPhone.addEventListener("change", syncSideStage);
 // the media queries cover it, but a resize listener makes the crossing work even
 // if a `change` event is missed (and is a no-op inside a stage either way)
