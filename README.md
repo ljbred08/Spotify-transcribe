@@ -62,6 +62,7 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 | `OPENROUTER_API_KEY` | — | enables the OpenRouter omni list (Gemini aliases, GPT Audio, Voxtral, …) + formatter |
 | `GROQ_API_KEY` | — | enables Whisper large v3/turbo transcription + Groq formatters |
 | `OPENAI_API_KEY` | — | enables Whisper / GPT-4o transcription + OpenAI audio/formatter models |
+| `GENIUS_ACCESS_TOKEN` | — | optional *last* metadata method: search the Genius **lyric** index with a line from your own transcript when Shazam and Deezer can't identify a track (Deezer and the LRCLIB lyric check need no key) |
 | `APP_DATA_DIR` | `data` | where audio, transcripts, settings live |
 | `YTDLP_COOKIES_FILE` | — | e.g. `cookies.txt` if yt-dlp gets blocked |
 | `YTDLP_EXTRA` | — | extra yt-dlp flags, comma-separated |
@@ -157,7 +158,35 @@ timing integrity is guaranteed by construction. Toggle in the Models panel (`llm
 ✅ Auto-scroll that yields to manual scrolling for 4s
 ✅ Playback speed control (0.75–1.5×)
 ✅ One-click exports: LRC / SRT / VTT / TXT / JSON
-💡 **Album art hero** — pull cover art via yt-dlp thumbnail into the hero + library cards
+✅ **Album art hero** — cover art in the hero + library cards, fetched in order: Shazam
+   fingerprints the local file, then a keyless **Deezer** search (1000×1000 covers),
+   then Shazam's text search, then Genius **searched by a line of your own lyrics**
+   (needs a token; runs after transcription, since that is when the lyrics exist).
+   Covers are cached in `data/art/`, and a hit is only accepted when it plausibly
+   *is* the track (title match, plus the artist when we know it) — a wrong cover is
+   worse than none. Version tails like `- FULL MIX` are stripped from the *query*
+   before searching, and when a title alone can't identify a song (five recordings
+   are called "Mama Says") the shortlist appears in the status card instead of a
+   guess. The picker filters in two levels: the main list is the **strict tier**
+   (hits whose artist agrees with ours, so the title+artist search would have
+   found them) minus the entries your transcript contradicts — checked against
+   LRCLIB's lyrics, which is the *only* filter when we have no artist — and
+   everything else, broad hits and lyrics-vetoed ones alike, sits under *More
+   results*. A confirmed entry is badged "lyrics match". Any cover that has no art yet shows a hover
+   **download** button to run the lookup (handy for tracks added before this
+   existed, and the way in for a custom mix no fingerprint can name), and
+   **right-clicking any cover** — hero or library card — offers *Redo metadata
+   search*, which always opens the picker so even a wrong pick can be replaced.
+   That picker lists what the search found **and** the pipeline's own answer,
+   badged by how it was found (*fingerprint match* / *title match* / *lyrics
+   search*), so a Shazam-only identification is just as selectable — and
+   replaceable — as a Deezer one. Applying a pick brings its **artist** across
+   too, even when the track already had one: picking a different recording is
+   the user saying the artist we hold is wrong. The title is never touched — a
+   metadata fetch does not rename anything. A cover never pops in: it is decoded
+   first and then **cross-fades** in over the placeholder, or over the cover it
+   replaces (art URLs are versioned by the file's mtime, so the outgoing and
+   incoming bitmaps are addressable at the same time).
 💡 **Follow-mode toggle + font-size slider** for comfortable desk reading
 💡 **Search-in-transcript** (⌘K palette) with jump-to-match
 💡 **Two-pane compare view** — original transcription vs. synced playback for edits

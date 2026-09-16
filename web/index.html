@@ -128,6 +128,17 @@
     padding: 12px;
     font-size: 13px;
   }
+  /* appearing/disappearing is a short fade; the sidebar then slides (see
+     slideBelow) rather than snapping */
+  @keyframes jobcard-in { from { opacity: 0; transform: translateY(-5px); }
+                          to   { opacity: 1; transform: none; } }
+  @keyframes jobcard-out { from { opacity: 1; transform: none; }
+                           to   { opacity: 0; transform: translateY(-4px); } }
+  #job-card.opening { animation: jobcard-in 160ms ease both; }
+  #job-card.closing { animation: jobcard-out 160ms ease both; }
+  @media (prefers-reduced-motion: reduce) {
+    #job-card.opening, #job-card.closing { animation-duration: 1ms; }
+  }
   #job-card .status-row { display: flex; align-items: center; gap: 8px; }
   .spinner {
     width: 14px; height: 14px; border-radius: 50%;
@@ -138,6 +149,8 @@
   #job-card.error .spinner { display: none; }
   #job-card.error .status-row::before { content: "✕"; color: var(--danger); font-weight: 800; }
   #job-card.done .spinner { display: none; }
+  #job-card.notice .spinner { display: none; }
+  #job-card.notice .status-row::before { content: "?"; color: var(--accent); font-weight: 800; }
   #job-card.done .status-row::before { content: "✔"; color: var(--accent); font-weight: 800; }
   .job-stop {
     margin-left: auto; border: 1px solid var(--line); background: var(--panel-2);
@@ -146,6 +159,44 @@
   }
   .job-stop:hover { border-color: var(--danger); color: var(--danger); }
   #job-card.done .job-stop, #job-card.error .job-stop { display: none; }
+  /* metadata shortlist: song titles collide, so the user picks the right one */
+  #job-cands { display: none; flex-direction: column; gap: 4px; margin-top: 10px; }
+  #job-cands .cand {
+    display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+    background: var(--panel-2); border: 1px solid var(--line); color: var(--text);
+    border-radius: 8px; padding: 5px 7px; font: inherit; font-size: 12px; cursor: pointer;
+  }
+  #job-cands .cand:hover { border-color: var(--accent); }
+  #job-cands .cand:disabled { opacity: .5; cursor: wait; }
+  #job-cands .cand-art {
+    flex: 0 0 32px; height: 32px; border-radius: 6px; background: var(--panel);
+    background-size: cover; background-position: center;
+  }
+  #job-cands .cand-meta { display: flex; flex-direction: column; min-width: 0; }
+  #job-cands .cand-meta b { font-weight: 600; }
+  #job-cands .cand-meta small { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #job-cands .cand-badge {
+    margin-left: auto; flex: 0 0 auto; font-size: 10px; letter-spacing: .02em;
+    color: var(--accent); border: 1px solid var(--accent); border-radius: 999px;
+    padding: 1px 6px; opacity: .85;
+  }
+  #job-cands .cand-more {
+    background: none; border: 1px dashed var(--line); color: var(--muted);
+    border-radius: 8px; padding: 4px 8px; font: inherit; font-size: 11px; cursor: pointer;
+  }
+  #job-cands .cand-more:hover { color: var(--text); border-color: var(--accent); }
+  /* right-click menu on a cover (hero or library card) */
+  #art-menu {
+    position: fixed; z-index: 200; min-width: 178px; padding: 4px;
+    background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 10px; box-shadow: 0 12px 28px rgba(2, 4, 8, .5);
+  }
+  #art-menu button {
+    display: block; width: 100%; text-align: left; background: none;
+    border: 0; border-radius: 7px; padding: 6px 8px; font: inherit;
+    font-size: 12px; color: var(--text); cursor: pointer;
+  }
+  #art-menu button:hover { background: var(--panel); color: var(--accent); }
   #job-msg { color: var(--muted); margin-top: 6px; font-size: 12px; line-height: 1.4; }
 
   #library { flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 8px; }
@@ -169,7 +220,19 @@
     width: 42px; height: 42px; border-radius: 9px; flex: none;
     background: linear-gradient(135deg, #223047, #17202f);
     display: grid; place-items: center; font-size: 17px;
+    position: relative; overflow: hidden;
   }
+  .track-art .art-fetch { border-radius: 9px; }
+  .track-art .art-fetch .ip-icon { width: 18px; height: 18px; }
+  /* a cover arrives as a fade: this layer holds the incoming bitmap above the
+     placeholder (or above the previous cover) until it has dissolved in */
+  .cover-fade {
+    position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
+    background-size: cover; background-position: center;
+    opacity: 0; transition: opacity 2000ms ease;
+  }
+  .cover-fade.in { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { .cover-fade { transition-duration: 1ms; } }
   .track-meta { min-width: 0; flex: 1; }
   .track-title { font-weight: 600; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track-artist { color: var(--muted); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -178,6 +241,7 @@
     font-size: 14px; padding: 6px; border-radius: 8px; opacity: 0; transition: opacity .15s;
   }
   .track-card:hover .track-del { opacity: 1; }
+  .track-card:hover .art-fetch { opacity: 1; }
   .track-del:hover { color: var(--danger); background: rgba(248,113,113,.1); }
   .empty-lib { color: var(--muted); font-size: 13px; padding: 14px 8px; line-height: 1.5; }
 
@@ -331,8 +395,20 @@
       linear-gradient(135deg, #223047, #141b28);
     display: grid; place-items: center; font-size: 44px;
     box-shadow: 0 20px 60px rgba(0,0,0,.5);
-    flex: none;
+    flex: none; position: relative;
   }
+  /* no art yet: hovering the empty cover offers a "fetch metadata" button.
+     Same affordance on the little library-card covers. */
+  .art-fetch {
+    position: absolute; inset: 0; border: none; border-radius: inherit;
+    background: rgba(6,9,14,.62); color: var(--text); cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    opacity: 0; transition: opacity .15s;
+  }
+  #hero-art:hover .art-fetch, .art-fetch.busy { opacity: 1; }
+  .art-fetch:hover { background: rgba(6,9,14,.72); color: var(--accent); }
+  .art-fetch .ip-icon { width: 22px; height: 22px; }
+  .art-fetch:disabled { cursor: wait; }
   #hero-meta h2 { font-size: 30px; font-weight: 800; letter-spacing: -0.03em; }
   #hero-meta p { color: var(--muted); margin-top: 4px; }
   /* inline editing: double-click the title/artist to edit in place */
@@ -611,26 +687,50 @@
      hides everything except the transport row, view settings and lyrics
      (the waveform's canvas scales up with CSS; the karaoke sweep stays the
      focus). A small button in the bottom-right toggles it. */
+  /* the WRAPPER is the click target, not just the round button: a click a few
+     pixels off the circle used to land on the wrapper's dead corners (rounded
+     corners aren't part of the button's hit area) and do nothing at all. The
+     padding makes the whole box forgiving; the button itself stays 40px. */
+  #fs-wrap {
+    position: fixed; right: 8px; bottom: 8px; z-index: 9999;
+    padding: 6px; pointer-events: auto; cursor: pointer;
+    line-height: 0;
+  }
   #fs-btn {
-    position: fixed; right: 14px; bottom: 14px; z-index: 70;
     background: var(--panel); color: var(--muted);
     border: 1px solid var(--line); border-radius: 999px;
-    width: 36px; height: 36px; cursor: pointer;
+    width: 40px; height: 40px; cursor: pointer;
     display: grid; place-items: center;
     transition: color .15s, border-color .15s, transform .06s;
-    opacity: .55;
+    opacity: .65;
+    padding: 0;
   }
-  #fs-btn:hover { color: var(--text); border-color: #2f3950; opacity: 1; }
+  #fs-wrap:hover #fs-btn { color: var(--text); border-color: #2f3950; opacity: 1; }
   #fs-btn:active { transform: scale(.94); }
   #fs-btn .ip-icon { width: 16px; height: 16px; }
   #main:only-child { display: flex; }
   body.fs-player #sidebar { display: none; }
   body.fs-player #main { position: fixed; inset: 0; z-index: 80; height: 100vh; background: var(--bg); }
-  body.fs-player #hero, body.fs-player #retrans-row, body.fs-player #export-row { display: none; }
-  body.fs-player #wave-wrap { padding: 4px 44px 0; }
-  body.fs-player #waveform { height: 42px; }
-  body.fs-player #lyrics { padding-top: 18px; font-size: 27px; }
-  body.fs-player .lyric-line { font-size: 27px; }
+  body.fs-player #fs-wrap { z-index: 9999; }
+  body.fs-player #hero, body.fs-player #retrans-row, body.fs-player #export-row,
+  body.fs-player #wave-wrap, body.fs-player .speed-group,
+  body.fs-player #skip-start-btn, body.fs-player #skip-end-btn,
+  body.fs-player #rew-btn, body.fs-player #fwd-btn { display: none; }
+  /* floating transport: centered at the bottom, above the lyrics */
+  body.fs-player #controls {
+    position: fixed; bottom: 36px; left: 50%; transform: translateX(-50%);
+    z-index: 85; background: rgba(11,14,20,.88); backdrop-filter: blur(12px);
+    border: 1px solid var(--line); border-radius: 999px;
+    padding: 6px 10px; gap: 10px;
+  }
+  body.fs-player #controls .pp-wrap { margin-left: 0; }
+  body.fs-player #lyrics {
+    padding: 40vh 44px 120px; font-size: 28px;
+    display: flex; flex-direction: column; align-items: center;
+    text-align: center;
+  }
+  body.fs-player .lyric-line { font-size: 28px; transform-origin: center; }
+  body.fs-player .lyric-line.active { transform: scale(1.04); }
 
   ::-webkit-scrollbar { width: 10px; }
   ::-webkit-scrollbar-thumb { background: #232a3a; border-radius: 99px; border: 2px solid var(--bg); }
@@ -671,7 +771,7 @@
       -webkit-tap-highlight-color: transparent;
     }
     .track-del { opacity: 1; }   /* no hover on touch */
-  #fs-btn { bottom: 10px; right: 10px; }
+  #fs-wrap { bottom: 4px; right: 4px; }
     #models-panel { flex: none; }
     #models-panel[open] { max-height: 55vh; overflow-y: auto; }
 
@@ -728,6 +828,7 @@
       <button class="job-stop" id="job-stop" type="button" title="Cancel this job"><i data-i="close"></i> Stop</button>
     </div>
     <div id="job-msg"></div>
+    <div id="job-cands"></div>
   </div>
 
   <div id="library">
@@ -800,6 +901,14 @@
         <span id="llm-hint" class="model-sub"></span>
       </div>
     </div>
+    <div class="cfg-block">
+      <div class="block-title">Album art <span class="block-note">— for metadata fetch</span></div>
+      <div class="backend-row">
+        <label for="genius-key">Genius API key</label>
+        <input type="password" id="genius-key" autocomplete="off" spellcheck="false" placeholder="(optional)" />
+        <span id="genius-key-state" class="key-state"></span>
+      </div>
+    </div>
   </details>
 </aside>
 
@@ -814,7 +923,7 @@
 
   <div id="player" style="display:none; flex:1; flex-direction:column;">
     <div id="hero">
-      <div id="hero-art"><i data-i="music"></i></div>
+      <div id="hero-art"><i data-i="music"></i><button class="art-fetch" id="hero-fetch" type="button" style="display:none" title="Fetch metadata (album art, artist info)"><i data-i="download"></i></button></div>
       <div id="hero-meta">
         <h2 id="track-title" title="Double-click to edit">—</h2>
         <input class="meta-input" id="title-input" spellcheck="false" />
@@ -898,8 +1007,7 @@
   <audio id="audio" preload="auto"></audio>
 </main>
 
-<button id="fs-btn" type="button" title="Full-window player"
-        style="display:none"><i data-i="expand"></i></button>
+<div id="fs-wrap" style="display:none"><button id="fs-btn" type="button" title="Full-window player (F)"><i data-i="full-screen-one"></i></button></div>
 
 <div id="modal-overlay">
   <div class="modal">
@@ -1010,8 +1118,74 @@ async function refreshLibrary() {
   renderLibrary();
 }
 
+/* ---- covers arrive as a fade ---------------------------------------------
+   A cover that lands after a metadata fetch used to pop in. Instead the
+   incoming bitmap is decoded first, dissolves in over whatever is already there
+   — the placeholder icon, or the cover it is replacing, whose URL the server
+   versions so it keeps painting the old pixels — and is only committed to the
+   element once it is fully visible. */
+const COVER_FADE_MS = 2000;
+let coverSeq = 0;                       // a newer cover supersedes an in-flight fade
+
+function setCover(el, url) {
+  if (!el || !url) return;
+  const token = ++coverSeq;
+  el.dataset.coverSeq = String(token);
+  const layer = document.createElement("span");
+  layer.className = "cover-fade";
+  layer.setAttribute("aria-hidden", "true");
+  layer.style.backgroundImage = `url("${url}")`;
+
+  const img = new Image();
+  img.onload = () => {
+    el.appendChild(layer);
+    void layer.offsetWidth;             // settle at opacity 0…
+    layer.classList.add("in");          // …then dissolve up to 1
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      layer.removeEventListener("transitionend", finish);
+      layer.remove();
+      // superseded while fading (another track, another cover): drop it
+      if (el.dataset.coverSeq !== String(token)) return;
+      el.style.backgroundImage = `url("${url}")`;
+      el.style.backgroundSize = "cover";
+      el.style.backgroundPosition = "center";
+    };
+    layer.addEventListener("transitionend", finish, { once: true });
+    setTimeout(finish, COVER_FADE_MS + 90);   // in case the transition never fires
+  };
+  // a cover that will not load leaves whatever is on screen alone
+  img.src = url;
+}
+
+/* Drop an in-flight fade for this element — used when its cover is cleared, so
+   a late finish cannot paint the old cover back over the placeholder. */
+function cancelCover(el) {
+  if (!el) return;
+  el.dataset.coverSeq = String(++coverSeq);
+  el.querySelectorAll(".cover-fade").forEach((layer) => layer.remove());
+}
+
+/* What each library card is showing right now, keyed by track id. Read off the
+   DOM before a re-render wipes it, so a changed cover has something to fade
+   *from*; on the first render there is nothing to read and nothing fades. */
+function captureArtShown() {
+  const shown = new Map();
+  document.querySelectorAll("#track-list .track-card").forEach((card) => {
+    if (!card.dataset.trackId) return;
+    const art = card.querySelector(".track-art");
+    const raw = (art && art.style.backgroundImage) || "";
+    shown.set(card.dataset.trackId,
+              raw.replace(/^url\(["']?/, "").replace(/["']?\)$/, ""));
+  });
+  return shown;
+}
+
 function renderLibrary() {
   const list = $("#track-list");
+  const shownBefore = captureArtShown();
   list.innerHTML = "";
   if (!tracks.length) {
     const d = document.createElement("div");
@@ -1023,8 +1197,20 @@ function renderLibrary() {
   for (const t of tracks) {
     const card = document.createElement("div");
     card.className = "track-card" + (currentTrack === t.id ? " active" : "");
+    card.dataset.trackId = t.id;
+    const artUrl = t.artUrl || (t.hasArt ? `/api/tracks/${t.id}/art` : "");
+    const prevArt = shownBefore.get(t.id) || "";
+    const fading = !!artUrl && artUrl !== prevArt;
+    // while fading, the card still shows the old cover (or the placeholder) and
+    // the new one dissolves in over it
+    const baseArt = fading ? prevArt : artUrl;
+    // note: no quotes around the url — this lands inside a double-quoted
+    // style="…" attribute, and `url("…")` there is cut short by the parser
+    const artStyle = baseArt
+      ? `background-image:url(${escapeHtml(baseArt)});background-size:cover;background-position:center;`
+      : "";
     card.innerHTML = `
-      <div class="track-art"><i data-i="music"></i></div>
+      <div class="track-art" style="${artStyle}"${t.hasArt ? ' title="Right-click to redo the metadata search"' : ""}>${t.hasArt ? "" : `<i data-i="music"></i><button class="art-fetch" type="button" title="Fetch metadata (album art, artist info)"><i data-i="download"></i></button>`}</div>
       <div class="track-meta">
         <div class="track-title">${escapeHtml(t.title)}</div>
         <div class="track-artist">${escapeHtml(t.artist)}${t.hasTranscript ? "" : " · no transcript"}</div>
@@ -1035,13 +1221,182 @@ function renderLibrary() {
       e.stopPropagation();
       if (!confirm(`Delete "${t.title}" and its files?`)) return;
       await fetch(`/api/tracks/${t.id}`, { method: "DELETE" });
-      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; $("#fs-btn").style.display = "none"; }
+      if (currentTrack === t.id) { currentTrack = null; currentData = null; $("#player").style.display = "none"; $("#empty").style.display = "flex"; $("#fs-wrap").style.display = "none"; }
       refreshLibrary();
     });
+    card.querySelector(".track-art").addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      showArtMenu(e.clientX, e.clientY, t.id, t.hasArt);
+    });
+    const fetchBtn = card.querySelector(".art-fetch");
+    if (fetchBtn) {
+      fetchBtn.addEventListener("click", async (e) => {
+        e.stopPropagation();   // don't also open the track
+        fetchBtn.disabled = true;
+        fetchBtn.classList.add("busy");   // keep the overlay visible while we wait
+        const res = await fetchMetadataFor(t.id);
+        const found = !!(res && res.artUrl);
+        const picks = (res && res.candidates) || [];
+        showJobCard({
+          status: found ? "done" : (picks.length ? "notice" : "error"),
+          message: found ? (res.message || "Album art found")
+                         : ((res && res.message) || "No metadata found for this track"),
+          candidates: picks,
+          trackId: t.id,
+        });
+        refreshLibrary();       // re-renders the card (with art, or without)
+        if (currentTrack === t.id) selectTrack(t.id);
+      });
+    }
     hydrateIcons(card);
+    if (fading) setCover(card.querySelector(".track-art"), artUrl);
     list.appendChild(card);
   }
 }
+
+/* ---- metadata fetch (Shazam → Genius, run by the server) -----------------
+   Every cover that has no art yet (hero + library cards) shows a download
+   button on hover; clicking it runs the two-method lookup, caches the cover
+   and refreshes what's on screen. */
+async function fetchMetadataFor(trackId, { pick = false } = {}) {
+  try {
+    const url = `/api/tracks/${trackId}/fetch-metadata${pick ? "?pick=true" : ""}`;
+    const res = await fetch(url, { method: "POST" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) return { message: data.detail || "Metadata fetch failed" };
+    return data;
+  } catch (err) {
+    console.warn("Metadata fetch failed:", err);
+    return { message: "Metadata fetch failed" };
+  }
+}
+
+/* ---- right-click a cover: redo the metadata search -----------------------
+   The hover button only exists while a track has NO art, so a wrong pick used to
+   be permanent. Right-clicking any cover — hero or library card — opens this
+   menu, and the redo deliberately always returns the picker (never an automatic
+   match), since the whole point is to replace a cover already on screen. */
+let artMenuEl = null;
+
+function onArtMenuKey(e) {
+  if (e.key === "Escape") closeArtMenu();
+}
+
+function closeArtMenu() {
+  if (!artMenuEl) return;
+  artMenuEl.remove();
+  artMenuEl = null;
+  document.removeEventListener("click", closeArtMenu, true);
+  document.removeEventListener("keydown", onArtMenuKey, true);
+  window.removeEventListener("scroll", closeArtMenu, true);
+  window.removeEventListener("blur", closeArtMenu, true);
+}
+
+function showArtMenu(x, y, trackId, hasArt) {
+  closeArtMenu();
+  const menu = document.createElement("div");
+  menu.id = "art-menu";
+  const item = document.createElement("button");
+  item.type = "button";
+  item.textContent = hasArt ? "Redo metadata search…" : "Fetch metadata";
+  item.addEventListener("click", () => {
+    closeArtMenu();
+    redoMetadataSearch(trackId);
+  });
+  menu.appendChild(item);
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+
+  // keep it inside the window
+  const box = menu.getBoundingClientRect();
+  if (box.right > window.innerWidth - 8) menu.style.left = `${Math.max(8, x - box.width)}px`;
+  if (box.bottom > window.innerHeight - 8) menu.style.top = `${Math.max(8, y - box.height)}px`;
+
+  artMenuEl = menu;
+  // deferred, so the click that opened the menu doesn't immediately close it
+  setTimeout(() => {
+    document.addEventListener("click", closeArtMenu, true);
+    document.addEventListener("keydown", onArtMenuKey, true);
+    window.addEventListener("scroll", closeArtMenu, true);
+    window.addEventListener("blur", closeArtMenu, true);
+  }, 0);
+}
+
+async function redoMetadataSearch(trackId) {
+  const res = await fetchMetadataFor(trackId, { pick: true });
+  const picks = (res && res.candidates) || [];
+  const found = !!(res && res.artUrl);
+  showJobCard({
+    status: picks.length ? "notice" : (found ? "done" : "error"),
+    message: (res && res.message) || "No metadata found for this track",
+    candidates: picks,
+    trackId,
+  });
+  await refreshLibrary();
+  if (currentTrack === trackId) selectTrack(trackId);
+}
+
+/* the hero cover doubles as the "no art yet" affordance: the placeholder icon
+   and the fetch button swap out once art exists */
+let heroArtUrl = "";        // what the hero is showing, so a new cover fades in
+
+function applyHeroArt(track) {
+  const art = $("#hero-art"), ico = art.querySelector("i"), btn = $("#hero-fetch");
+  const url = track.artUrl || "";
+  art.title = url ? "Right-click to redo the metadata search" : "";
+  if (url) {
+    if (url !== heroArtUrl) {
+      setCover(art, url);    // a cover arriving or being redone: cross-fade it
+    } else {
+      art.style.backgroundImage = `url("${url}")`;
+      art.style.backgroundSize = "cover";
+      art.style.backgroundPosition = "center";
+    }
+    ico.style.display = "none";
+    if (btn) btn.style.display = "none";
+  } else {
+    cancelCover(art);        // no cover: nothing should fade back in behind it
+    art.style.backgroundImage = "";
+    ico.style.display = "";
+    setIcon(ico, "music");
+    if (btn) { btn.style.display = "flex"; btn.disabled = false; }
+  }
+  heroArtUrl = url;
+}
+
+$("#hero-art").addEventListener("contextmenu", (e) => {
+  if (!currentTrack || !currentData) return;
+  e.preventDefault();
+  showArtMenu(e.clientX, e.clientY, currentTrack, !!currentData.artUrl);
+});
+
+$("#hero-fetch").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  if (!currentTrack || !currentData) return;
+  const btn = $("#hero-fetch");
+  btn.disabled = true;
+  btn.classList.add("busy");
+  const res = await fetchMetadataFor(currentTrack);
+  btn.disabled = false;
+  btn.classList.remove("busy");
+  const found = !!(res && res.artUrl);
+  if (found) {
+    currentData.artUrl = res.artUrl;
+    if (res.artist) { currentData.artist = res.artist; $("#track-artist").textContent = res.artist; }
+    applyHeroArt(currentData);
+  }
+  const picks = (res && res.candidates) || [];
+  showJobCard({
+    status: found ? "done" : (picks.length ? "notice" : "error"),
+    message: found ? (res.message || "Album art found")
+                   : ((res && res.message) || "No metadata found for this track"),
+    candidates: picks,
+    trackId: currentTrack,
+  });
+  refreshLibrary();
+});
 
 function escapeHtml(s) {
   return (s || "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -1100,19 +1455,256 @@ $("#file-input").addEventListener("change", async (e) => {
 
 let activeJobId = null;
 
-function showJobCard({ status, message }) {
+/* One status card, one pending hide. Every path that shows the card comes
+   through here, so nothing can be left stuck on screen: a finished result fades
+   out on its own, while a running job and a picker waiting for a click stay put.
+   (The metadata paths used to show the card directly and never schedule the
+   hide, so "Cover from …" sat there forever.) Hovering holds the card open, and
+   clicking it dismisses it early. */
+const JOB_CARD_LINGER_MS = 10000;
+const JOB_CARD_FADE_MS = 160;    // the card's own fade in/out (matches the CSS)
+const JOB_CARD_SLIDE_MS = 170;   // how long the sidebar takes to close the gap
+const BUSY_STATUSES = ["queued", "downloading", "transcribing", "aligning"];
+let jobCardTimer = null;
+let jobCardLingers = false;      // does the card on screen hide by itself?
+let jobCardBusy = false;         // is a job still running? (progress: keep it)
+let jobCardHovered = false;
+let jobCardCloser = null;        // set while a fade-out is in flight
+
+function armJobCardHide() {
+  clearTimeout(jobCardTimer);
+  jobCardTimer = null;
+  if (jobCardLingers && !jobCardHovered) {
+    jobCardTimer = setTimeout(hideJobCard, JOB_CARD_LINGER_MS);
+  }
+}
+
+/* Everything below the card in the sidebar moves when it appears or disappears.
+   Measured before/after and slid into place (a FLIP), so the library glides
+   instead of jumping — the card is not the only thing on screen. */
+function sidebarBelow() {
+  return [$("#library"), $("#models-panel")].filter((el) => el && el.offsetParent);
+}
+
+/* Drop any in-flight slide, so measuring positions reads true layout and not a
+   transform that is still animating. */
+function clearSlides() {
+  sidebarBelow().forEach((el) => {
+    el.style.transition = "";
+    el.style.transform = "";
+  });
+}
+
+function slideBelow(tops) {
+  // the card's own fade already honours this; the gap closing should too
+  const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const ms = reduced ? 1 : JOB_CARD_SLIDE_MS;
+  sidebarBelow().forEach((el, i) => {
+    el.style.transition = "none";
+    el.style.transform = "";
+    const delta = tops[i] - el.getBoundingClientRect().top;
+    if (Math.abs(delta) < 1) return;
+    let finished = false;
+    const settle = () => {
+      if (finished) return;
+      finished = true;
+      el.style.transition = "";
+      el.style.transform = "";
+    };
+    el.style.transform = `translateY(${delta}px)`;   // put it back where it was…
+    el.getBoundingClientRect();                      // …apply that, then let go
+    el.style.transition = `transform ${ms}ms ease`;
+    el.style.transform = "";
+    el.addEventListener("transitionend", settle, { once: true });
+    setTimeout(settle, ms + 80);                     // in case nothing animates
+  });
+}
+
+function hideJobCard() {
+  clearTimeout(jobCardTimer);
+  jobCardTimer = null;
+  jobCardLingers = false;
   const card = $("#job-card");
+  if (card.style.display === "none" || jobCardCloser) return;
+
+  // fade out first, *then* take up no space — a sharp vanish reads as a glitch
+  card.classList.remove("opening");
+  card.classList.add("closing");
+  let finished = false;
+  const finish = (slide = true) => {
+    if (finished) return;
+    finished = true;
+    jobCardCloser = null;
+    card.removeEventListener("animationend", onFaded);
+    card.classList.remove("closing");
+    if (!slide) {
+      card.style.display = "none";
+      return;
+    }
+    clearSlides();
+    const tops = sidebarBelow().map((el) => el.getBoundingClientRect().top);
+    card.style.display = "none";
+    slideBelow(tops);
+  };
+  // only the fade-out ends the card; a fade-*in* still finishing (dismiss
+  // clicked within 160ms of the card appearing) must not cut it short
+  const onFaded = (e) => {
+    if (e.animationName !== "jobcard-out") return;
+    finish();
+  };
+  jobCardCloser = finish;
+  card.addEventListener("animationend", onFaded);
+  setTimeout(() => finish(), JOB_CARD_FADE_MS + 90);
+}
+
+function showJobCard({ status, message, candidates, trackId }) {
+  const card = $("#job-card");
+  clearSlides();
+  const appearing = card.style.display === "none" || !!jobCardCloser;
+  const tops = appearing ? sidebarBelow().map((el) => el.getBoundingClientRect().top) : null;
+  if (jobCardCloser) jobCardCloser(false);   // mid-fade: it goes now, no slide
   card.style.display = "block";
+  if (appearing) {
+    card.classList.remove("opening");
+    void card.offsetWidth;                // retrigger the keyframes on a re-show
+    card.classList.add("opening");
+    slideBelow(tops);
+  }
   card.classList.toggle("error", status === "error");
   card.classList.toggle("done", status === "done");
+  card.classList.toggle("notice", status === "notice");
   const labels = {
     queued: "Queued", downloading: "Downloading audio", transcribing: "Transcribing",
     aligning: "Aligning lines", done: "Done", error: "Failed",
+    notice: "Pick the right song",
   };
   $("#job-status").textContent = labels[status] || status;
   $("#job-msg").textContent = message || "";
-  $("#job-stop").style.display =
-    ["queued", "downloading", "transcribing", "aligning"].includes(status) ? "" : "none";
+  $("#job-stop").style.display = BUSY_STATUSES.includes(status) ? "" : "none";
+  showCandidates(trackId, candidates, message);
+
+  // a fresh card cancels the old countdown instead of inheriting it
+  jobCardBusy = BUSY_STATUSES.includes(status);
+  jobCardLingers = !jobCardBusy && !(status === "notice" && (candidates || []).length);
+  card.style.cursor = jobCardBusy ? "default" : "pointer";
+  card.title = jobCardBusy ? "" : "Click to dismiss";
+  armJobCardHide();
+}
+
+/* click the card to dismiss it — but not the controls living inside it, and not
+   while a job is running (the card is that job's progress display).
+
+   The dismissal test looks at the *dispatch-time* path, not just where the click
+   landed: a control inside the card can take itself out of the document mid-click
+   ("More results" removes itself; picking a candidate re-renders the whole list),
+   and a detached target no longer has #job-cands among its ancestors. */
+$("#job-card").addEventListener("click", (e) => {
+  if (jobCardBusy) return;
+  const path = e.composedPath ? e.composedPath() : [];
+  const control = path.some((n) => n.nodeType === 1 &&
+    (n.id === "job-cands" || n.classList.contains("job-stop")));
+  if (control || e.target.closest("#job-cands, .job-stop")) return;
+  hideJobCard();
+});
+
+$("#job-card").addEventListener("mouseenter", () => {
+  jobCardHovered = true;
+  clearTimeout(jobCardTimer);      // hold it open while it is being read
+  jobCardTimer = null;
+});
+
+$("#job-card").addEventListener("mouseleave", () => {
+  jobCardHovered = false;
+  armJobCardHide();
+});
+
+/* When a title alone can't identify a song (five recordings are called "Mama
+   Says"), the server hands back the shortlist instead of a guess: show the
+   cover and artist of each so the right one can be picked with one click.
+
+   The main list is the *strict* tier — hits whose artist agrees with ours, so
+   the title+artist search would have found them — minus the ones our transcript
+   contradicts. When that search yields nothing (no artist, or a wrong one) the
+   broad title hits take its place, so the panel is never empty. Everything else
+   — broad hits and lyrics-vetoed ones — sits under one "More results" toggle:
+   nothing is thrown away, just folded. */
+function showCandidates(trackId, candidates, message) {
+  const box = $("#job-cands");
+  box.innerHTML = "";
+  if (!trackId || !candidates || !candidates.length) {
+    box.style.display = "none";
+    return;
+  }
+  box.style.display = "flex";
+
+  const keep = (list) => list.filter((c) => c.match !== "mismatch");
+  const strict = keep(candidates.filter((c) => c.tier === "strict"));
+  const broad = keep(candidates.filter((c) => c.tier !== "strict"));
+  const shown = strict.length ? strict : (broad.length ? broad : candidates);
+  const folded = candidates.filter((c) => !shown.includes(c));
+
+  for (const c of shown) box.appendChild(candidateRow(trackId, c));
+
+  if (folded.length) {
+    const more = document.createElement("button");
+    more.type = "button";
+    more.className = "cand-more";
+    more.textContent = `More results (${folded.length})`;
+    if (message) more.title = message;
+    more.addEventListener("click", (e) => {
+      e.stopPropagation();   // unfolding is not a dismissal
+      more.remove();
+      for (const c of folded) box.appendChild(candidateRow(trackId, c));
+    });
+    box.appendChild(more);
+  }
+}
+
+/* What each kind of match is, in the picker's badge. A pipeline match carries a
+   source; a Deezer hit is only badged when our lyrics confirm it. */
+const MATCH_BADGES = {
+  shazam: "fingerprint match",
+  "shazam-search": "title match",
+  "genius-lyrics": "lyrics search",
+};
+
+/* one clickable candidate row; picking it caches that cover server-side */
+function candidateRow(trackId, c) {
+  const row = document.createElement("button");
+  row.type = "button";
+  row.className = "cand";
+  const sub = [c.artist, c.album].filter(Boolean).join(" · ");
+  const label = MATCH_BADGES[c.source] || (c.match === "match" ? "lyrics match" : "");
+  const badge = label ? `<span class="cand-badge">${escapeHtml(label)}</span>` : "";
+  row.innerHTML =
+    `<span class="cand-art"${c.artUrl ? ` style="background-image:url(${escapeHtml(c.artUrl)})"` : ""}></span>` +
+    `<span class="cand-meta"><b>${escapeHtml(c.title)}</b><small>${escapeHtml(sub)}</small></span>${badge}`;
+  row.addEventListener("click", async (e) => {
+    e.stopPropagation();   // picking a candidate re-renders the card; don't dismiss it
+    row.disabled = true;
+    try {
+      // a pipeline match is addressed by our token, a Deezer hit by its id
+      const body = c.token ? { matchToken: c.token } : { candidateId: c.id };
+      const res = await fetch(`/api/tracks/${trackId}/metadata/apply`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      const ok = res.ok && !!data.artUrl;
+      showJobCard({
+        status: ok ? "done" : "error",
+        message: ok ? `Cover from ${c.title} — ${c.artist}`
+                    : (data.message || "Could not apply that match"),
+      });
+      await refreshLibrary();
+      if (currentTrack === trackId) selectTrack(trackId);
+    } catch (err) {
+      row.disabled = false;
+      showJobCard({ status: "error", message: String(err.message || err) });
+    }
+  });
+  return row;
 }
 
 function pollJob(jobId) {
@@ -1127,7 +1719,7 @@ function pollJob(jobId) {
       clearInterval(pollTimer);
       await refreshLibrary();
       if (job.status === "done" && job.trackId) selectTrack(job.trackId);
-      setTimeout(() => { $("#job-card").style.display = "none"; }, 4000);
+      // the card hides itself after a few seconds — see showJobCard
     }
   }, 1000);
 }
@@ -1239,10 +1831,11 @@ async function selectTrack(trackId) {
   currentData = await res.json();
   $("#empty").style.display = "none";
   $("#player").style.display = "flex";
-  $("#fs-btn").style.display = "";
+  $("#fs-wrap").style.display = "";
   $("#track-title").textContent = currentData.title;
   $("#track-artist").textContent = currentData.artist || "—";
   $("#track-artist").style.opacity = currentData.artist ? "" : ".45";
+  applyHeroArt(currentData);
   $("#track-artist").title = currentData.artist
     ? "Double-click to edit artist" : "Double-click to add an artist";
   $("#badge-lines").textContent = `${currentData.lines.length} lines`;
@@ -2048,6 +2641,16 @@ function renderConfig(data) {
                    providersCache.find((p) => p.id === fProv) || {});
     renderLlmStatus(s.llm || {}, fProv);
   }
+  // --- block 3: album art (Genius key) ---
+  const geniusKey = s.genius_key || s.keys?.genius_key || "";
+  const geniusState = $("#genius-key-state");
+  if (geniusKey) {
+    geniusState.textContent = "✓ set";
+    geniusState.className = "key-state ok";
+  } else {
+    geniusState.textContent = "not set";
+    geniusState.className = "key-state missing";
+  }
 }
 
 async function refreshModels() {
@@ -2147,6 +2750,9 @@ $("#llm-model").addEventListener("change", async () => {
 });
 
 $("#llm-key").addEventListener("change", () => saveKey("llm-key", $("#llm-provider").value));
+
+// Genius API key for album art metadata
+$("#genius-key").addEventListener("change", () => saveKey("genius-key", "genius_key"));
 
 let llmUrlTimer = null;
 $("#llm-url").addEventListener("change", () => {
@@ -2297,19 +2903,31 @@ const FS_ICON = { enter: "full-screen-one", exit: "off-screen-one" };
 function setFullscreenPlayer(on) {
   document.body.classList.toggle("fs-player", on);
   setIcon($("#fs-btn"), on ? FS_ICON.exit : FS_ICON.enter);
-  $("#fs-btn").title = on ? "Exit full-window player" : "Full-window player";
+  $("#fs-btn").title = (on ? "Exit full-window player" : "Full-window player") + " (F)";
   lastManualScroll = 0;   // let auto-scroll re-center in the new layout
   buildWaveform();        // canvas geometry changed; repaint at the new size
 }
-$("#fs-btn").addEventListener("click", () => {
+function toggleFullscreenPlayer() {
   setFullscreenPlayer(!document.body.classList.contains("fs-player"));
-});
+}
 
+// Bind on the wrapper so every pixel of the corner (including the round
+// button's dead corners) toggles the player.
+$("#fs-wrap").addEventListener("click", toggleFullscreenPlayer);
+
+// F toggles, Escape only ever exits — reachable without aiming at the corner.
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && document.body.classList.contains("fs-player")) {
-    setFullscreenPlayer(false);
+  const t = e.target;
+  if (t && t.closest && t.closest("input, textarea, select, [contenteditable]")) return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (document.body.classList.contains("fs-player")) {
+    if (e.key === "Escape") setFullscreenPlayer(false);
+    return;
   }
-});
+  if (e.key === "f" || e.key === "F") {
+    if ($("#fs-wrap").style.display !== "none") toggleFullscreenPlayer();
+  }
+})
 
 /* ---------------- sidebar collapse ---------------- */
 $("#side-toggle").addEventListener("click", () => {

@@ -1,6 +1,7 @@
 """Background job pipeline: download -> transcribe -> assemble -> persist."""
 from __future__ import annotations
 
+import logging
 import shutil
 import threading
 import time
@@ -12,6 +13,8 @@ import app.config as cfg
 from app import downloader, exporters, formatter, transcribe
 from app.models import Job, JobStatus, Line, Store, Track, Word
 from app.settings import settings
+
+log = logging.getLogger(__name__)
 
 store = Store()
 
@@ -81,11 +84,18 @@ class Pipeline:
             self.store.add_track(track)
             self.store.update_job(job.id, track_id=track.id)
 
+            # Fire-and-forget metadata fetch in background: the fingerprint pass
+            # needs no lyrics, and the transcription below gets one started early
+            self._fetch_metadata_async(track)
+
             result, lines, llm_note = self._run_transcribe_with_timeout(
                 job, dl.audio_path, title=track.title, artist=track.artist)
 
             version = self.store.save_transcript(track.id, lines,
                                                  backend=result.backend)
+            # Second pass now that the lyrics exist — this is the one that can
+            # search Genius by lyric line. Skipped when the first pass found art.
+            self._fetch_metadata_async(track, lines=lines)
             self.store.update_job(job.id, status=JobStatus.DONE,
                                   message=f"Done via {result.backend} · "
                                           f"{len(lines)} lines{llm_note} · v{version}")
@@ -94,6 +104,42 @@ class Pipeline:
         except Exception as exc:  # noqa: BLE001 - top-level job guard
             traceback.print_exc()
             self.store.update_job(job.id, status=JobStatus.ERROR, message=str(exc)[:300])
+
+    def _fetch_metadata_async(self, track: Track,
+                              *, lines: list[Line] | None = None) -> None:
+        """Fetch metadata for a track in the background.
+
+        Called twice per download: at submit time without lyrics (Shazam's audio
+        fingerprint needs none) and again once the transcript exists, when the
+        lyrics open up Genius's lyric search. The second call is skipped when the
+        first already produced a cover, so the common path costs one lookup.
+
+        Fire-and-forget either way: a miss (or a missing Genius key) leaves the
+        track exactly as the downloader/upload named it. Only the artist is
+        filled in when we don't have one — the title is the user's to edit.
+        """
+        def _run() -> None:
+            try:
+                import asyncio
+                from app.metadata import art_for, fetch_metadata, lyrics_text
+                if lines is not None and art_for(track.id):
+                    return                      # the pre-transcription pass won
+                loop = asyncio.new_event_loop()
+                try:
+                    result = loop.run_until_complete(fetch_metadata(
+                        track.title, track.artist, track_id=track.id,
+                        audio_path=track.audio_file,
+                        lyrics=lyrics_text(lines) if lines else None))
+                finally:
+                    loop.close()
+                unknown = not track.artist or track.artist == "Unknown artist"
+                if result and unknown and result.get("artist"):
+                    self.store.update_track(track.id, artist=result["artist"])
+            except Exception as exc:  # noqa: BLE001 - never fail the job for this
+                log.warning("Metadata fetch failed for %s: %s", track.title, exc)
+
+        t = threading.Thread(target=_run, name=f"meta-{track.id}", daemon=True)
+        t.start()
 
     def _check_canceled(self, job: Job) -> None:
         fresh = self.store.get_job(job.id)
@@ -218,6 +264,9 @@ class Pipeline:
             job, track.audio_file, title=track.title, artist=track.artist)
         version = self.store.save_transcript(track.id, lines,
                                              backend=result.backend)
+        # Uploads have no download-time pass, so this IS their metadata fetch —
+        # and by now the lyrics exist, so Genius's lyric search is available.
+        self._fetch_metadata_async(track, lines=lines)
         self.store.update_job(job.id, status=JobStatus.DONE,
                               message=f"Done via {result.backend} · "
                                       f"{len(lines)} lines{llm_note} · v{version}")

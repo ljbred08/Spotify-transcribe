@@ -15,6 +15,9 @@ dependencies = [
     "pydantic>=2.7",
     "spotdl>=4.5",
     "ytmusicapi>=1.8",
+    "shazamio>=0.8",
+    "lyricsgenius>=3.12",
+    "audioop-lts>=0.2",
 ]
 
 [project.optional-dependencies]

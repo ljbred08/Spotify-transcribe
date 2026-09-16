@@ -1,6 +1,7 @@
 """FastAPI app: REST API + static UI serving."""
 from __future__ import annotations
 
+import asyncio
 import difflib
 import re
 import subprocess
@@ -186,14 +187,52 @@ def cancel_job(job_id: str):
     return {"id": job.id, "status": job.status.value, "message": job.message}
 
 
+# Friendly names for the status card (the raw ids are internal hop names).
+SOURCE_LABELS = {
+    "shazam": "Shazam (audio fingerprint)",
+    "deezer": "Deezer",
+    "shazam-search": "Shazam (text search)",
+    "genius": "Genius",
+}
+
+
+def _has_art(track_id: str) -> bool:
+    """Check if cached album art exists for a track."""
+    from app.metadata import art_for
+    return art_for(track_id) is not None
+
+
+def _art_url(track_id: str) -> str | None:
+    """URL for a track's cached cover, or None when it has none.
+
+    Versioned by the file's mtime: replacing a cover changes the URL, so the
+    browser fetches the new bytes instead of reusing the one it already has —
+    and the client can dissolve the old cover into the new one, because the old
+    URL still paints the old pixels.
+    """
+    if not _has_art(track_id):
+        return None
+    from app.metadata import art_for
+
+    path = art_for(track_id)
+    try:
+        stamp = path.stat().st_mtime_ns
+    except (AttributeError, OSError):   # gone between the check and here
+        return f"/api/tracks/{track_id}/art"
+    return f"/api/tracks/{track_id}/art?v={stamp}"
+
+
 @app.get("/api/tracks")
 def list_tracks():
-    return [
-        {"id": t.id, "title": t.title, "artist": t.artist,
-         "duration": t.duration, "hasTranscript":
-             store.load_transcript(t.id) is not None}
-        for t in store.list_tracks()
-    ]
+    rows = []
+    for t in store.list_tracks():
+        art_url = _art_url(t.id)          # one lookup serves both fields
+        rows.append({"id": t.id, "title": t.title, "artist": t.artist,
+                     "duration": t.duration, "hasTranscript":
+                         store.load_transcript(t.id) is not None,
+                     "hasArt": art_url is not None,
+                     "artUrl": art_url})
+    return rows
 
 
 @app.get("/api/tracks/{track_id}")
@@ -206,6 +245,7 @@ def get_track(track_id: str):
         "id": track.id, "title": track.title, "artist": track.artist,
         "duration": track.duration,
         "audioUrl": f"/api/tracks/{track.id}/audio",
+        "artUrl": _art_url(track.id),
         "lines": [
             {"text": l.text, "start": l.start,
              "words": [{"text": w.text, "start": w.start, "end": w.end}
@@ -408,6 +448,212 @@ def discover_llm(body: dict | None = None):
         settings.update(llm_url=found)
         formatter.invalidate_status_cache()
     return {"found": found, "llm": formatter.llm_status()}
+
+
+class MetadataCandidate(BaseModel):
+    """One song that could be this track: a Deezer hit, or a pipeline match."""
+    id: str = ""                  # Deezer track id (empty for a pipeline match)
+    # What the pipeline found (Shazam fingerprint/text search, Genius lyrics)
+    # carries its own cover URL and no Deezer id; the server keeps it and refers
+    # to it by this token instead, so a client never names a URL we fetch.
+    token: str | None = None
+    title: str
+    artist: str
+    album: str | None = None
+    artUrl: str | None = None
+    duration: int | None = None
+    source: str | None = None
+    # "strict" when the hit's artist agrees with ours (or the pipeline found it),
+    # else "broad" — the main list is the strict survivors
+    tier: str | None = None
+    # "match" / "mismatch" from comparing the transcript against this song's
+    # lyrics, or None when we could not judge it (no lyrics on file)
+    match: str | None = None
+
+
+class MetadataFetchResult(BaseModel):
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    art_path: str | None = None
+    artUrl: str | None = None
+    source: str | None = None
+    message: str = ""
+    candidates: list[MetadataCandidate] = []
+
+
+class MetadataApplyRequest(BaseModel):
+    """The pick: a Deezer id, or our token for a match the pipeline found."""
+    candidateId: str | None = None
+    matchToken: str | None = None
+
+
+def _candidate_message(candidates: list[MetadataCandidate], *,
+                       matched: dict | None = None, pick: bool = False) -> str:
+    """What the status card says above the shortlist."""
+    if matched and matched.get("source"):
+        label = SOURCE_LABELS.get(matched["source"], "the metadata search")
+        return (f'{label} identified "{matched.get("title")}" — '
+                f'pick anything below to replace that cover')
+    confirmed = [c for c in candidates if c.match == "match"]
+    if len(confirmed) == 1:
+        return f'Our lyrics point at "{confirmed[0].title}" — confirm below'
+    if candidates:
+        # a redo already has a cover; calling it "no confident match" reads wrong
+        return "Pick the right song" if pick else "No confident match — pick the right song"
+    return "No metadata found for this track"
+
+
+def _candidate_models(found: list[dict]) -> list[MetadataCandidate]:
+    return [MetadataCandidate(id=c["id"], title=c["title"], artist=c["artist"],
+                              album=c.get("album"), artUrl=c.get("art_url"),
+                              duration=c.get("duration"), match=c.get("match"),
+                              tier=c.get("tier"))
+            for c in found]
+
+
+def _match_candidate(track_id: str, result: dict) -> MetadataCandidate:
+    """A pipeline match (Shazam fingerprint, text search, Genius) as a pick."""
+    from app.metadata import remember_match
+
+    return MetadataCandidate(
+        token=remember_match(track_id, result),
+        title=result.get("title") or "",
+        artist=result.get("artist") or "",
+        album=result.get("album") or None,
+        artUrl=result.get("art_url"),
+        source=result.get("source"),
+        tier="strict",          # an identification, never something to fold away
+    )
+
+
+def _track_lyrics(track_id: str) -> str | None:
+    """The track's transcript as lyric text, if it has one.
+
+    Our own ASR output is what makes a Genius lyric search possible — and it is
+    already on disk, so this costs nothing.
+    """
+    from app.metadata import lyrics_text
+
+    lines = store.load_transcript(track_id)
+    return lyrics_text(lines) if lines else None
+
+
+@app.post("/api/tracks/{track_id}/fetch-metadata")
+async def fetch_track_metadata(track_id: str, pick: bool = False):
+    """Run the Shazam → Deezer → Genius metadata pipeline for one track.
+
+    Used by the hover "fetch metadata" button on any track that has no art. When
+    a title alone can't identify the song we answer with the shortlist instead of
+    a guess, so the user can pick (see ``/metadata/apply``).
+
+    ``pick=true`` is the right-click "redo metadata search": the shortlist comes
+    back *no matter how sure the pipeline is*, because the point is to replace a
+    cover the user already has — including one Shazam identified by fingerprint.
+    """
+    from app.metadata import fetch_metadata, find_candidates, same_recording
+
+    track = store.get_track(track_id)
+    if not track:
+        raise HTTPException(404, "track not found")
+    lyrics = _track_lyrics(track_id)
+
+    if pick:
+        # Both halves run together: the shortlist to choose from, and the
+        # pipeline's own answer. That answer belongs in the picker as its first
+        # entry — when Shazam knows the track by fingerprint, that is the match
+        # to keep *and* the cover to replace. cache_art=False keeps it read-only.
+        found, matched = await asyncio.gather(
+            find_candidates(track.title, track.artist, lyrics=lyrics),
+            fetch_metadata(track.title, track.artist, track_id=track_id,
+                           audio_path=track.audio_file, lyrics=lyrics,
+                           cache_art=False),
+        )
+        candidates = _candidate_models(found)
+        # One song must not fill two rows: if the search already lists that same
+        # release, its row is the pick (a real Deezer id beats a token). Coming
+        # from a fingerprint, the match may sit beside its own remixes — those
+        # are different recordings and get their own row.
+        if matched and not any(
+                same_recording(c.title, c.artist, matched.get("title", ""),
+                               matched.get("artist", ""))
+                for c in candidates):
+            candidates.insert(0, _match_candidate(track_id, matched))
+        return MetadataFetchResult(
+            candidates=candidates,
+            message=_candidate_message(candidates, matched=matched, pick=True))
+
+    result = await fetch_metadata(
+        track.title, track.artist, track_id=track_id, audio_path=track.audio_file,
+        lyrics=lyrics)
+    if result is None:
+        candidates = _candidate_models(
+            await find_candidates(track.title, track.artist, lyrics=lyrics))
+        return MetadataFetchResult(
+            candidates=candidates, message=_candidate_message(candidates))
+    # Only fill in what we actually learned: the title is the user's (or the
+    # downloader's) and a metadata fetch never renames anything, while the
+    # artist is real information the track was missing or had wrong.
+    new_title = track.title
+    new_artist = result.get("artist") or track.artist
+    store.update_track(track_id, title=new_title, artist=new_artist)
+    return MetadataFetchResult(
+        title=new_title, artist=new_artist,
+        album=result.get("album"), art_path=result.get("art_path"),
+        artUrl=_art_url(track_id),
+        source=result.get("source"),
+        message=f"Found via {SOURCE_LABELS.get(result.get('source'), 'a text search')}",
+    )
+
+
+@app.post("/api/tracks/{track_id}/metadata/apply")
+async def apply_track_metadata(track_id: str, body: MetadataApplyRequest):
+    """Apply the entry the user picked — a Deezer hit or a pipeline match."""
+    from app.metadata import apply_candidate, apply_match, take_match
+
+    track = store.get_track(track_id)
+    if not track:
+        raise HTTPException(404, "track not found")
+    if body.matchToken:
+        meta = take_match(body.matchToken, track_id)
+        if not meta:
+            return MetadataFetchResult(message="That match has expired — search again")
+        result = await apply_match(track_id, meta)
+    elif body.candidateId:
+        result = await apply_candidate(track_id, body.candidateId)
+    else:
+        raise HTTPException(400, "nothing to apply")
+    if result is None:
+        return MetadataFetchResult(message="That match is no longer available")
+    # The user is deliberately naming *this* recording, so the pick's artist wins
+    # over whatever is on the track. Filling an empty artist only (the old rule)
+    # meant redoing a search onto a different song swapped the cover while
+    # leaving the wrong artist in place. The title is never touched: a metadata
+    # fetch does not rename a track, and the user's own edits always win there.
+    new_artist = result.get("artist") or track.artist
+    if new_artist != track.artist:
+        store.update_track(track_id, artist=new_artist)
+    return MetadataFetchResult(
+        title=track.title, artist=new_artist, album=result.get("album"),
+        art_path=result.get("art_path"),
+        artUrl=_art_url(track_id),
+        source=result.get("source"),
+        message=f"Applied {SOURCE_LABELS.get(result.get('source'), 'match')}",
+    )
+
+
+@app.get("/api/tracks/{track_id}/art")
+async def get_track_art(track_id: str):
+    """Serve the cached album art for a track, or 404 if none."""
+    from app.metadata import MEDIA_TYPES, art_for
+
+    art_file = art_for(track_id)
+    if art_file is None:
+        raise HTTPException(404, "no album art")
+    return FileResponse(
+        art_file, media_type=MEDIA_TYPES.get(art_file.suffix.lower(), "image/jpeg"),
+        headers={"Cache-Control": "no-cache"},
+    )
 
 
 @app.exception_handler(404)
