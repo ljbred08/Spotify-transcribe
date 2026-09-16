@@ -237,12 +237,199 @@ def test_edit_line_validates():
         # the failed edits did NOT create versions
         idx = client.get(f"/api/tracks/{track.id}/versions").json()
         assert len(idx["versions"]) == 1
-        # successful edit creates an undoable "edited" version
+        # the first edit forks an undoable "edited" version, which keeps the
+        # transcribed version's lineage so it can still be re-synced later
         client.post(f"/api/tracks/{track.id}/edit_line",
                     json={"lineIndex": 0, "text": "hello there"})
         idx = client.get(f"/api/tracks/{track.id}/versions").json()
         assert idx["active"] == 2
         assert idx["versions"][-1]["note"] == "edited"
-        assert idx["versions"][-1]["backend"] is None
+        assert idx["versions"][-1]["backend"] == "test"
+        assert idx["versions"][-1]["edited"] is True
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_editing_again_updates_the_edited_version_in_place():
+    """Editing is iterative: one edited version, not one per keystroke."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "hello there"})
+        # …and again, and again
+        for text in ("hello there friend", "hello there friend!"):
+            res = client.post(f"/api/tracks/{track.id}/edit_line",
+                              json={"lineIndex": 0, "text": text})
+            assert res.status_code == 200
+            assert res.json()["version"] == 2      # the same version, every time
+
+        idx = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert [v["version"] for v in idx["versions"]] == [1, 2]
+        assert idx["versions"][-1]["editedAt"]     # last edit is recorded
+        assert store.load_transcript(track.id)[0].text == "hello there friend!"
+        # …and version 1 is still the model's own words, untouched
+        assert store.activate_version(track.id, 1)
+        assert store.load_transcript(track.id)[0].text == "hello world"
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_new_transcription_of_an_edited_track_forks_again():
+    """Only the version being edited is written in place."""
+    from app.models import Line, Word
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "edited once"})
+        # a re-transcription (or resync) makes v3 and becomes active
+        store.save_transcript(track.id, [Line(text="fresh", start=0.0,
+                                              progress=0.0,
+                                              words=[Word("fresh", 0.0, 0.5)])],
+                              backend="other-model")
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "fresh, hand-fixed"})
+        assert res.json()["version"] == 4          # forked, not written into v3
+        idx = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert idx["versions"][-1]["backend"] == "other-model"
+        assert idx["versions"][-1]["note"] == "edited"
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_splitting_a_line_keeps_both_halves_timings():
+    """A split is a layout change: each half keeps the words it had."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        # "hello world" with the caret after "hello "
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "hello world",
+                                "splitAt": 6})
+        assert res.status_code == 200
+        assert res.json()["lines"] == 3            # one line became two
+
+        lines = store.load_transcript(track.id)
+        assert [l.text for l in lines] == ["hello", "world", "second line"]
+        first, second, third = lines
+        assert (first.start, first.words[0].start) == (1.0, 1.0)
+        assert (second.start, second.words[0].start) == (1.5, 1.5)
+        assert second.words[0].text == "world"
+        assert second.words[0].end == 2.0
+        assert third.words[0].start == 3.0         # untouched
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_split_can_carry_an_edit_on_either_side():
+    """Fixing a word and splitting it in the same pass works."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "hey world",
+                                "splitAt": 4})
+        assert res.status_code == 200
+        lines = store.load_transcript(track.id)
+        assert [l.text for l in lines[:2]] == ["hey", "world"]
+        # "hey" replaced "hello", so it takes that slot's timing
+        assert lines[0].words[0].start == 1.0
+        assert lines[1].words[0].start == 1.5
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_split_in_the_middle_of_a_word_still_lands_somewhere():
+    """Splitting mid-word is user error; it must not crash or lose the words."""
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "hello world",
+                                "splitAt": 3})
+        assert res.status_code == 200
+        lines = store.load_transcript(track.id)
+        assert [l.text for l in lines[:2]] == ["hel", "lo world"]
+        assert all(w.text for w in lines[0].words)
+        assert all(w.text for w in lines[1].words)
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_split_with_nothing_on_one_side_is_rejected():
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        for payload in ({"lineIndex": 0, "text": "hello", "splitAt": 0},
+                        {"lineIndex": 0, "text": "hello", "splitAt": 5},
+                        {"lineIndex": 0, "text": "hello  ", "splitAt": 6},
+                        {"lineIndex": 0, "text": "  hello", "splitAt": 1},
+                        {"lineIndex": 0, "text": "hello", "splitAt": 99}):
+            assert client.post(f"/api/tracks/{track.id}/edit_line",
+                               json=payload).status_code == 400
+        # a rejected split must not have touched the transcript at all
+        idx = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert len(idx["versions"]) == 1
+        assert store.load_transcript(track.id)[0].text == "hello world"
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_a_legacy_edited_version_still_counts_as_edited():
+    """Versions written before the flag existed keep being written in place."""
+    import json
+
+    import app.config as cfg
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        # a version from the old behaviour: note "edited", no flag, no backend
+        d = cfg.DATA_DIR / "transcripts" / track.id
+        path = d / "versions.json"
+        (d / "v2.lrc").write_text((d / "v1.lrc").read_text(encoding="utf-8"),
+                                  encoding="utf-8")
+        index = json.loads(path.read_text(encoding="utf-8"))
+        index["versions"].append({"version": 2, "createdAt": 0, "backend": None,
+                                  "lines": 2, "note": "edited", "fmt": "lrc"})
+        index["active"] = 2
+        path.write_text(json.dumps(index), encoding="utf-8")
+
+        versions = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert versions["versions"][-1]["edited"] is True   # reads as edited
+
+        # and an edit onto it updates that version instead of forking a new one
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "still the same version"})
+        assert res.json()["version"] == 2
+        idx = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert [v["version"] for v in idx["versions"]] == [1, 2]
+    finally:
+        _cleanup_track(track.id)
+
+
+def test_splitting_an_edited_version_saves_it_in_place():
+    from app.pipeline import store
+
+    track = _make_editable_track()
+    try:
+        client.post(f"/api/tracks/{track.id}/edit_line",
+                    json={"lineIndex": 0, "text": "hello world"})
+        res = client.post(f"/api/tracks/{track.id}/edit_line",
+                          json={"lineIndex": 0, "text": "hello world",
+                                "splitAt": 6})
+        assert res.json()["version"] == 2
+        idx = client.get(f"/api/tracks/{track.id}/versions").json()
+        assert [v["version"] for v in idx["versions"]] == [1, 2]
+        assert idx["versions"][-1]["lines"] == 3       # line count kept current
+        assert [l.text for l in store.load_transcript(track.id)][:2] == ["hello",
+                                                                        "world"]
     finally:
         _cleanup_track(track.id)

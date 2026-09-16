@@ -14,6 +14,18 @@ from typing import Any
 import app.config as cfg
 
 
+def _is_edited_version(entry: dict) -> bool:
+    """True for a version the user wrote by hand — original or legacy row."""
+    return bool(entry.get("edited")) or (entry.get("note") or "").strip() == "edited"
+
+
+def _result_is_parked(job_id: str) -> bool:
+    """Is there an unsaved paid result for this job? (import deferred: cycle)"""
+    from app import recovery
+
+    return recovery.has_pending(job_id)
+
+
 class JobStatus(str, Enum):
     QUEUED = "queued"
     DOWNLOADING = "downloading"
@@ -47,6 +59,8 @@ class Track:
     url: str
     title: str = "Untitled"
     artist: str = "Unknown artist"
+    # filled in by a metadata fetch/apply when the search knew it; "" otherwise
+    album: str = ""
     duration: float = 0.0
     audio_file: Path | None = None  # set by the downloader
     created_at: float = field(default_factory=time.time)
@@ -69,6 +83,9 @@ class Job:
     # set when the user (or the timeout watchdog) asks to cancel; the
     # pipeline checks it at every stage boundary and raises Canceled
     cancel_requested: bool = False
+    # the watchdog gave up on this job (as opposed to the user canceling it);
+    # a timed-out job still keeps the model's answer if one arrived
+    timed_out: bool = False
 
 
 class Store:
@@ -96,6 +113,7 @@ class Store:
             track = Track(
                 id=t["id"], url=t["url"], title=t.get("title", "Untitled"),
                 artist=t.get("artist", "Unknown artist"),
+                album=t.get("album", ""),
                 duration=t.get("duration", 0.0),
                 audio_file=Path(t["audio_file"]) if t.get("audio_file") else None,
                 created_at=t.get("created_at", time.time()),
@@ -106,11 +124,17 @@ class Store:
                 status = JobStatus(j.get("status", "error"))
             except ValueError:
                 status = JobStatus.ERROR
-            # jobs never survive a restart mid-flight
+            # Jobs never survive a restart mid-flight — except when a paid API
+            # result is parked on disk for them. Then the job is left alive for
+            # the pipeline to resume, because finishing it costs nothing while
+            # re-running it costs another transcription.
             if status in (JobStatus.QUEUED, JobStatus.DOWNLOADING,
                           JobStatus.TRANSCRIBING, JobStatus.ALIGNING):
-                status = JobStatus.ERROR
-                j["message"] = "Interrupted by restart"
+                if _result_is_parked(j["id"]):
+                    j["message"] = "Resuming after restart…"
+                else:
+                    status = JobStatus.ERROR
+                    j["message"] = "Interrupted by restart"
             job = Job(
                 id=j["id"], url=j["url"], status=status,
                 message=j.get("message", ""), track_id=j.get("track_id"),
@@ -120,6 +144,7 @@ class Store:
                 retranscribe_backend=j.get("retranscribe_backend"),
                 retranscribe_model=j.get("retranscribe_model"),
                 cancel_requested=j.get("cancel_requested", False),
+                timed_out=j.get("timed_out", False),
             )
             self._jobs[job.id] = job
 
@@ -222,8 +247,9 @@ class Store:
         return existed
 
     def update_track(self, track_id: str, *, title: str | None = None,
-                     artist: str | None = None) -> Track | None:
-        """Patch editable metadata (title/artist); None leaves a field as-is."""
+                     artist: str | None = None,
+                     album: str | None = None) -> Track | None:
+        """Patch a track's metadata; None leaves a field as-is."""
         with self._lock:
             track = self._tracks.get(track_id)
             if track is None:
@@ -232,6 +258,8 @@ class Store:
                 track.title = title
             if artist is not None:
                 track.artist = artist
+            if album is not None:
+                track.album = album
             self._save()
             return track
 
@@ -269,9 +297,15 @@ class Store:
         if not p.exists():
             return None
         try:
-            return json.loads(p.read_text(encoding="utf-8"))
+            index = json.loads(p.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             return None
+        # Versions edited before the flag existed are still user-written ones:
+        # mark them so they read as edited and keep being written in place.
+        for v in index.get("versions", []):
+            if _is_edited_version(v):
+                v["edited"] = True
+        return index
 
     def _write_versions_index(self, track_id: str, index: dict) -> None:
         self._versions_index_path(track_id).write_text(
@@ -280,44 +314,78 @@ class Store:
     def save_transcript(self, track_id: str, lines: list[Line],
                         *, backend: str | None = None,
                         note: str | None = None,
-                        match: int | None = None) -> int:
+                        match: int | None = None,
+                        edited: bool = False) -> int:
         """Persist lines as a new version; it becomes the active one.
 
         Returns the version number. Previous versions are kept so a bad
         re-run can always be rolled back. `match` is the improve-sync match
         accuracy (0-100); stored on the version so several resyncs can be
-        compared at a glance in the UI.
+        compared at a glance in the UI. `edited` marks a version the user
+        wrote by hand (see ``save_edit``).
         """
         # the index read-modify-write must not interleave with an activate()
         # from an endpoint thread or another job's save
         with self._lock:
             return self._save_transcript_locked(track_id, lines,
                                                 backend=backend, note=note,
-                                                match=match)
+                                                match=match, edited=edited)
+
+    def save_edit(self, track_id: str, lines: list[Line]) -> int:
+        """Persist a user's lyric edit, updating the same version each time.
+
+        Editing is iterative — fix a word, then another, then split a line — and
+        a new version per keystroke drowned the real ones. So the *first* edit
+        forks a version off the model's transcript (marked ``edited``, and
+        keeping that transcript's backend as its lineage so it can still be
+        re-synced and told apart from a fresh transcription), and every later
+        edit writes into that same version in place. The model's own version is
+        never touched, so it stays available to roll back to.
+        """
+        with self._lock:
+            index = self._read_versions_index(track_id)
+            active = next((v for v in (index or {}).get("versions", [])
+                           if v["version"] == (index or {}).get("active")), None)
+            if active is not None and _is_edited_version(active):
+                self._write_version_file(track_id, active["version"], lines)
+                active["lines"] = len(lines)
+                active["editedAt"] = time.time()
+                self._write_versions_index(track_id, index)
+                return active["version"]
+            # first edit: fork, inheriting the lineage of what we forked from
+            return self._save_transcript_locked(
+                track_id, lines, backend=(active or {}).get("backend"),
+                note="edited", edited=True)
+
+    def _write_version_file(self, track_id: str, version: int,
+                            lines: list[Line]) -> None:
+        """Write one version's Enhanced LRC (the canonical stored form)."""
+        from app.lrc import serialize
+        track = self._tracks.get(track_id)
+        d = self._transcript_dir(track_id)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"v{version}.lrc").write_text(
+            serialize(track.title if track else "",
+                      track.artist if track else "", lines), encoding="utf-8")
 
     def _save_transcript_locked(self, track_id: str, lines: list[Line],
                                 *, backend: str | None,
                                 note: str | None,
-                                match: int | None = None) -> int:
+                                match: int | None = None,
+                                edited: bool = False) -> int:
         # Canonical storage is Enhanced LRC text (word-level tags) so the
         # format we get from audio LLMs is exactly what we keep; it is
         # re-parsed on every load, so parser improvements apply to every
         # stored version retroactively.
-        from app.lrc import serialize
-        track = self._tracks.get(track_id)
-        title = track.title if track else ""
-        artist = track.artist if track else ""
         self._migrate_legacy_transcript(track_id)
-        d = self._transcript_dir(track_id)
-        d.mkdir(parents=True, exist_ok=True)
         index = self._read_versions_index(track_id) or {"active": 0, "versions": []}
         version = (max((v["version"] for v in index["versions"]), default=0)) + 1
-        (d / f"v{version}.lrc").write_text(
-            serialize(title, artist, lines), encoding="utf-8")
+        self._write_version_file(track_id, version, lines)
         index["versions"].append({
             "version": version, "createdAt": time.time(), "backend": backend,
             "lines": len(lines), "note": note, "fmt": "lrc",
             **({"match": match} if match is not None else {}),
+            **({"edited": True} if edited else {}),
         })
         index["active"] = version
         self._write_versions_index(track_id, index)

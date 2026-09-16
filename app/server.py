@@ -8,7 +8,7 @@ import subprocess
 import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -16,7 +16,7 @@ from pydantic import BaseModel
 import app.config as cfg
 from app import exporters, formatter, transcribe
 from app import cloud_models
-from app.models import JobStatus, Track, Word
+from app.models import JobStatus, Line, Track, Word
 from app.pipeline import delete_track_files, pipeline, store
 from app.settings import settings
 
@@ -37,61 +37,99 @@ class TrackRenameIn(BaseModel):
 class LyricEditIn(BaseModel):
     lineIndex: int
     text: str
+    # when set, the line is split at this character offset instead of replaced
+    splitAt: int | None = None
 
 
-def _edit_lines(lines: list, line_index: int, text: str) -> list:
-    """Apply a lyric text edit to a parsed transcript, preserving timings.
+def _reword(anchor: float, old: list, new_tokens: list) -> list[Word]:
+    """Rebuild a word list for `new_tokens`, keeping `old`'s timings.
 
-    Word tags only carry start times (a word's end is the next tag's start),
-    so the word list is rebuilt by diffing old vs new tokens:
+    Word tags only carry start times (a word's end is the next tag's start), so
+    tokens are reconciled by diffing old against new:
     - unchanged words keep their exact timings;
     - replaced words take over the old slot's timing (n new tokens spread
       across m old slots, extras sharing the last slot);
     - inserted words sit at the next surviving word's start (zero-width),
-      or continue from the line's end when appending;
+      or continue from the previous word when appending;
     - deleted words are simply dropped — the next survivor's start closes
       the gap automatically on the next parse.
+
+    `anchor` is where appended words continue from when there is nothing left
+    to inherit from (the line's start, or the half a split left behind).
     """
+    if not old:
+        # no word timings to inherit: even split across a nominal 1s span
+        step = max(0.1, 1.0) / len(new_tokens)
+        return [Word(text=t, start=anchor + k * step, end=anchor + (k + 1) * step)
+                for k, t in enumerate(new_tokens)]
+
+    sm = difflib.SequenceMatcher(
+        a=[_norm_tok(w.text) for w in old],
+        b=[_norm_tok(t) for t in new_tokens], autojunk=False)
+    new_words: list[Word] = []
+    for tag, i1, i2, j1, j2 in sm.get_opcodes():
+        if tag in ("equal", "replace"):
+            slots = old[i1:i2]
+            if slots:
+                for k, tok in enumerate(new_tokens[j1:j2]):
+                    src = slots[min(k, len(slots) - 1)]
+                    new_words.append(Word(text=tok, start=src.start, end=src.end))
+                continue
+            # "replace" against nothing == insert
+            i1 = min(i1, len(old))
+        if tag == "insert" or not old[i1:i2]:
+            if i1 < len(old):
+                nxt = old[i1]               # zero-width before the next word
+                new_words.extend(Word(text=t, start=nxt.start, end=nxt.start)
+                                 for t in new_tokens[j1:j2])
+            else:
+                tail = new_words[-1].end if new_words else anchor
+                new_words.extend(Word(text=t, start=tail, end=tail)
+                                 for t in new_tokens[j1:j2])
+        # "delete": drop the old words
+    return new_words
+
+
+def _edit_lines(lines: list, line_index: int, text: str) -> list:
+    """Apply a lyric text edit to a parsed transcript, preserving timings."""
     new_tokens = text.split()
     if not new_tokens:
         raise ValueError("edited line cannot be empty")
     line = lines[line_index]
-    old = line.words
-    if old:
-        sm = difflib.SequenceMatcher(
-            a=[_norm_tok(w.text) for w in old],
-            b=[_norm_tok(t) for t in new_tokens], autojunk=False)
-        new_words: list[Word] = []
-        for tag, i1, i2, j1, j2 in sm.get_opcodes():
-            if tag in ("equal", "replace"):
-                slots = old[i1:i2]
-                if slots:
-                    for k, tok in enumerate(new_tokens[j1:j2]):
-                        src = slots[min(k, len(slots) - 1)]
-                        new_words.append(Word(text=tok, start=src.start,
-                                              end=src.end))
-                    continue
-                # "replace" against nothing == insert
-                i1 = min(i1, len(old))
-            if tag == "insert" or not old[i1:i2]:
-                if i1 < len(old):
-                    nxt = old[i1]           # zero-width before the next word
-                    new_words.extend(Word(text=t, start=nxt.start, end=nxt.start)
-                                     for t in new_tokens[j1:j2])
-                else:
-                    tail = new_words[-1].end if new_words else line.start
-                    new_words.extend(Word(text=t, start=tail, end=tail)
-                                     for t in new_tokens[j1:j2])
-            # "delete": drop the old words
-        line.words = new_words
-    else:
-        # line without word timings: even split across a nominal 1s span
-        span = line.start + 1.0
-        step = (span - line.start) / len(new_tokens)
-        line.words = [Word(text=t, start=line.start + k * step,
-                           end=line.start + (k + 1) * step)
-                      for k, t in enumerate(new_tokens)]
+    line.words = _reword(line.start, line.words, new_tokens)
     line.text = " ".join(w.text for w in line.words)
+    return lines
+
+
+def _split_lines(lines: list, line_index: int, text: str, offset: int) -> list:
+    """Split one lyric line in two at a character offset, keeping timings.
+
+    The left half keeps the words up to the split and the right half takes the
+    rest, so both keep the timings they already had instead of being spread
+    across a guess: splitting a line is a *layout* change, not a re-timing.
+    Any other edit the user made in the same pass is reconciled against its own
+    half's slots (``_reword``), so fixing a word and splitting it still works.
+    """
+    if not 0 < offset < len(text):
+        raise ValueError("the cursor is not in the middle of the line")
+    line = lines[line_index]
+    left_tokens = text[:offset].split()
+    right_tokens = text[offset:].split()
+    if not left_tokens or not right_tokens:
+        raise ValueError("a split needs words on both sides of the cursor")
+
+    old = list(line.words)
+    cut = min(len(left_tokens), len(old))          # old words the left half keeps
+    left_words = _reword(line.start, old[:cut], left_tokens)
+    anchor = left_words[-1].end if left_words else line.start
+    right_words = _reword(anchor, old[cut:], right_tokens)
+
+    line.text = " ".join(w.text for w in left_words)
+    line.words = left_words
+    lines.insert(line_index + 1, Line(
+        text=" ".join(w.text for w in right_words),
+        start=right_words[0].start if right_words else anchor,
+        progress=0.0, words=right_words))
     return lines
 
 
@@ -243,6 +281,7 @@ def get_track(track_id: str):
     lines = store.load_transcript(track_id) or []
     return {
         "id": track.id, "title": track.title, "artist": track.artist,
+        "album": track.album,
         "duration": track.duration,
         "audioUrl": f"/api/tracks/{track.id}/audio",
         "artUrl": _art_url(track.id),
@@ -274,18 +313,27 @@ def rename_track(track_id: str, body: TrackRenameIn):
 
 @app.post("/api/tracks/{track_id}/edit_line")
 def edit_line(track_id: str, body: LyricEditIn):
-    """Edit one lyric line; stored as a new transcript version (undoable)."""
+    """Edit one lyric line, or split it in two when ``splitAt`` is given.
+
+    Saved through ``store.save_edit``: the first edit forks a version off the
+    model's transcript (so the original is always rollback-able) and later
+    edits update that same version instead of stacking up a version per
+    keystroke. Word timings are preserved either way — a split is a layout
+    change, not a re-timing.
+    """
     lines = store.load_transcript(track_id)
     if lines is None:
         raise HTTPException(404, "no transcript for this track")
     if not 0 <= body.lineIndex < len(lines):
         raise HTTPException(400, "lineIndex out of range")
     try:
-        _edit_lines(lines, body.lineIndex, body.text)
+        if body.splitAt is None:
+            _edit_lines(lines, body.lineIndex, body.text)
+        else:
+            _split_lines(lines, body.lineIndex, body.text, body.splitAt)
     except ValueError as exc:
         raise HTTPException(400, str(exc))
-    version = store.save_transcript(track_id, lines,
-                                    backend=None, note="edited")
+    version = store.save_edit(track_id, lines)
     return {"version": version, "lines": len(lines)}
 
 
@@ -305,6 +353,8 @@ def export_track(track_id: str, fmt: str = "lrc"):
     lines = store.load_transcript(track_id) or []
     if not lines:
         raise HTTPException(404, "no transcript for this track")
+    if fmt == "mp3":
+        return _mp3_download(track, lines)
     try:
         # [ti:]/[ar:] tags inside stored versions may be stale (title/artist
         # are editable); the track record is the source of truth
@@ -317,6 +367,33 @@ def export_track(track_id: str, fmt: str = "lrc"):
     return PlainTextResponse(content, media_type=media,
                              headers={"Content-Disposition":
                                       f'attachment; filename="{track.title}.{ext}"'})
+
+
+def _mp3_download(track: Track, lines: list) -> Response:
+    """The track as an MP3: audio, its tags, cover and all three lyric layers.
+
+    The lyrics are the *active* version, exactly like the text exports —
+    ``store.load_transcript`` is the same call they use — so switching versions
+    in the UI switches what gets baked into the file.
+    """
+    from app.metadata import art_for
+    from app.mp3 import export_mp3
+
+    if not track.audio_file or not track.audio_file.exists():
+        raise HTTPException(404, "no audio for this track")
+    try:
+        data = export_mp3(
+            track.audio_file, title=track.title, artist=track.artist,
+            album=track.album, lines=lines,
+            # regenerated rather than reused: a stored version's own [ti:]/[ar:]
+            # header can be stale (title/artist are editable)
+            enhanced_lrc=exporters.to_lrc_enhanced(track.title, track.artist, lines),
+            art=art_for(track.id))
+    except RuntimeError as exc:
+        raise HTTPException(400, str(exc))
+    return Response(content=data, media_type="audio/mpeg",
+                    headers={"Content-Disposition":
+                             f'attachment; filename="{track.title}.mp3"'})
 
 
 @app.delete("/api/tracks/{track_id}")
@@ -593,10 +670,11 @@ async def fetch_track_metadata(track_id: str, pick: bool = False):
             candidates=candidates, message=_candidate_message(candidates))
     # Only fill in what we actually learned: the title is the user's (or the
     # downloader's) and a metadata fetch never renames anything, while the
-    # artist is real information the track was missing or had wrong.
+    # artist and album are real information the track was missing or had wrong.
     new_title = track.title
     new_artist = result.get("artist") or track.artist
-    store.update_track(track_id, title=new_title, artist=new_artist)
+    store.update_track(track_id, title=new_title, artist=new_artist,
+                       album=result.get("album") or None)
     return MetadataFetchResult(
         title=new_title, artist=new_artist,
         album=result.get("album"), art_path=result.get("art_path"),
@@ -631,8 +709,10 @@ async def apply_track_metadata(track_id: str, body: MetadataApplyRequest):
     # leaving the wrong artist in place. The title is never touched: a metadata
     # fetch does not rename a track, and the user's own edits always win there.
     new_artist = result.get("artist") or track.artist
-    if new_artist != track.artist:
-        store.update_track(track_id, artist=new_artist)
+    if new_artist != track.artist or (result.get("album") and
+                                      result["album"] != track.album):
+        store.update_track(track_id, artist=new_artist,
+                           album=result.get("album") or None)
     return MetadataFetchResult(
         title=track.title, artist=new_artist, album=result.get("album"),
         art_path=result.get("art_path"),

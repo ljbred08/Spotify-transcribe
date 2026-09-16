@@ -991,6 +991,7 @@
       <div class="pp-wrap">
         <button class="export-btn" id="dl-btn"><i data-i="download"></i> Download <i data-i="down-c" class="caret"></i></button>
         <div class="pp-menu dl-menu" id="dl-menu">
+          <button data-fmt="mp3" title="MP3: the audio with title/artist/album, cover art, and the lyrics embedded (word-level SYLT + plain lyrics + Enhanced LRC)"><i data-i="music"></i> MP3 · audio + lyrics</button>
           <button data-fmt="lrc" title="Plain LRC: one [mm:ss.xx] tag per line"><i data-i="download"></i> LRC</button>
           <button data-fmt="lrc-enhanced" title="Enhanced LRC (A2): word-level timing tags for karaoke players"><i data-i="download"></i> Enhanced LRC</button>
           <button data-fmt="srt"><i data-i="download"></i> SRT</button>
@@ -1775,6 +1776,7 @@ async function loadVersions(trackId) {
     const versions = idx.versions || [];
     const pillLabel = (v) =>
       `v${v.version}${v.backend ? " · " + v.backend.split(":").pop() : ""}`
+      + (v.edited ? " · edited" : "")
       + (v.note && v.note.startsWith("sync improved") ? " · sync" : "")
       + (typeof v.match === "number" ? ` · ${v.match}%` : "");
     const pillTitle = (v) =>
@@ -1911,7 +1913,7 @@ function _charOffsetAt(div, text, x, y) {
   } catch { return null; }
 }
 
-function startLineEdit(idx, div, e) {
+function startLineEdit(idx, div, e, caretAt, initial) {
   if (div.querySelector(".lyric-edit")) return;   // already editing
   const line = currentData.lines[idx];
   if (!line) return;
@@ -1925,53 +1927,107 @@ function startLineEdit(idx, div, e) {
   div.classList.remove("active");
   const inp = document.createElement("input");
   inp.className = "lyric-edit";
-  inp.value = line.text;
+  inp.value = initial != null ? initial : line.text;
   inp.spellcheck = false;
   div.appendChild(inp);
   inp.focus();
-  if (caretChar != null) inp.setSelectionRange(caretChar, caretChar);
+  if (caretAt != null) inp.setSelectionRange(caretAt, caretAt);
+  else if (caretChar != null) inp.setSelectionRange(caretChar, caretChar);
   else inp.select();
+
   let done = false;   // Enter then blur must not double-save
-  const finish = async (save) => {
-    if (done) return;
+  // mode: "save" (store the text) | "split" (store it as two lines) | false
+  // (cancel). Returns true once the line is settled — saved, or with nothing
+  // to save — so the caller may carry on to another line.
+  const finish = async (mode, caret) => {
+    if (done) return false;
     done = true;
     inp.removeEventListener("keydown", onKey);
     inp.removeEventListener("blur", onBlur);
-    const val = inp.value.trim();
+    inp.removeEventListener("input", onInput);
+    const value = inp.value;
     inp.remove();
     div.classList.remove("editing");
     if (wasActive) div.classList.add("active");
-    if (!save || !val || val === line.text) { buildLyrics(); return; }
+    if (mode === false) { buildLyrics(); return false; }
+    const text = mode === "split" ? value : value.trim();
+    if (mode !== "split" && (!text || text === line.text)) {
+      buildLyrics();   // nothing to store — don't add a save for no change
+      return true;
+    }
+    const body = { lineIndex: idx, text };
+    if (mode === "split") body.splitAt = caret;
     const res = await fetch(`/api/tracks/${currentTrack}/edit_line`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ lineIndex: idx, text: val }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const detail = (await res.json().catch(() => ({}))).detail;
       showJobCard({ status: "error", message: detail || "Edit failed" });
       buildLyrics();
-      return;
+      return false;
     }
-    // re-fetch: the server re-times words (insert/delete), so render from
+    // re-fetch: the server re-times words (insert/delete/split), so render from
     // the stored result rather than patching text locally
     const fresh = await (await fetch(`/api/tracks/${currentTrack}`)).json();
     currentData.lines = fresh.lines;
     buildLyrics();
-    loadVersions(currentTrack);   // the edit is a new version — show it
-    const node = lineNodes[idx];
-    if (node) {   // small save acknowledgment
-      node.classList.add("save-flash");
-      setTimeout(() => node.classList.remove("save-flash"), 900);
+    loadVersions(currentTrack);   // edits live in one version — show its state
+    for (const i of (mode === "split" ? [idx, idx + 1] : [idx])) {
+      const node = lineNodes[i];
+      if (node) {   // small save acknowledgment
+        node.classList.add("save-flash");
+        setTimeout(() => node.classList.remove("save-flash"), 900);
+      }
     }
+    return true;
   };
+
+  // Enter acts on where the caret is: at the start of the line nothing
+  // happens, at the end the caret carries on at the start of the next line,
+  // and anywhere between words the line is split in two there.
+  const editNextLine = () => {
+    const node = lineNodes[idx + 1];
+    if (node) startLineEdit(idx + 1, node, null, 0);
+  };
+  const enterAt = async (caret) => {
+    const value = inp.value;
+    if (!value.slice(0, caret).trim()) return;          // at the start: no action
+    if (!value.slice(caret).trim()) {                   // at the end: next line
+      if (await finish("save")) editNextLine();
+      return;
+    }
+    if (await finish("split", caret)) editNextLine();   // the rest is now a new line
+  };
+
   const onKey = (e) => {
-    if (e.key === "Enter") { e.preventDefault(); finish(true); }
-    else if (e.key === "Escape") { e.preventDefault(); finish(false); }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      enterAt(inp.selectionStart ?? inp.value.length);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finish(false);
+    }
     e.stopPropagation();   // keep player hotkeys out of the editor
   };
-  const onBlur = () => finish(false);
+  // clicking out of a lyric saves it (Escape is still the way to discard)
+  const onBlur = () => finish("save");
+  // A newline in the middle of a line does exactly what Enter does there — the
+  // newline is dropped and the line splits. Single-line inputs rarely keep a
+  // real \n, so the literal two-character "\n" counts as well.
+  const onInput = () => {
+    const v = inp.value;
+    let at = v.indexOf("\n");
+    let width = 1;
+    if (at === -1) { at = v.indexOf("\\n"); width = 2; }
+    if (at === -1) return;
+    inp.value = v.slice(0, at) + v.slice(at + width);
+    inp.setSelectionRange(at, at);
+    enterAt(at);
+  };
   inp.addEventListener("keydown", onKey);
   inp.addEventListener("blur", onBlur);
+  inp.addEventListener("input", onInput);
 }
 
 /* ---- title/artist inline editing (double-click) ---- */

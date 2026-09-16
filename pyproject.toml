@@ -18,6 +18,8 @@ dependencies = [
     "shazamio>=0.8",
     "lyricsgenius>=3.12",
     "audioop-lts>=0.2",
+    "mutagen>=1.47",
+    "pydub>=0.25",
 ]
 
 [project.optional-dependencies]

@@ -1,7 +1,8 @@
 # Refrain 🎵
 
 Paste a song link → get a karaoke-style synced transcript you can read along with,
-then export as **LRC / SRT / VTT / TXT / JSON**.
+then export as **LRC / SRT / VTT / TXT / JSON** — or as an **MP3 with the lyrics
+baked in**.
 
 ```
 Spotify URL ──▶ spotdl metadata ──▶ spotdl match ──────▶ yt-dlp ─┐
@@ -109,6 +110,48 @@ Each transcription run creates a **new version** (`v1`, `v2`, …) alongside the
 ones — nothing is overwritten, so a worse re-run can simply be rolled back. Version pills
 next to the button switch the active version; every export uses the active version.
 
+## Editing a line
+
+Double-click a lyric to edit it in place. **Clicking out saves**; Escape discards.
+Editing is iterative, so it does *not* pile up a version per keystroke: the first edit
+forks **one** version off the model's transcript — marked `edited`, keeping that
+transcript's backend as its lineage so it can still be re-synced and told apart from a
+fresh transcription — and every later edit writes into that same version. The model's
+own version is never touched, so rolling back to the raw transcription is always one
+dropdown away.
+
+**Enter** acts on where the caret is:
+
+| caret | what Enter does |
+| --- | --- |
+| at the start of the line | nothing |
+| at the end | saves, then carries on at the start of the next line |
+| anywhere between words | splits the line in two there |
+
+Splitting is a *layout* change, not a re-timing: the left half keeps the words it had and
+the right half takes the rest, each with its own original timings. A newline in the
+middle of a line (typed, or pasted as the literal two characters `\n`) does exactly what
+Enter there does — it is removed and the line splits.
+
+## Never losing a paid transcription
+
+A transcription is the only step here that costs money and the slowest by far, so a
+crash, a Ctrl-C or a restart is most expensive exactly where it is most likely. The
+rule the pipeline enforces: **the moment a paid call returns, its output is written to
+disk** (`data/pending/<job>.json`, atomically — a crash mid-write leaves the old file
+or the new one, never half of one). It is deleted only once the transcript is saved for
+real. On startup anything still parked is finished off — saved lines are reused as-is,
+raw words go through the same grouping the live run would have used, and an improve-sync
+reference needs only local aligning — so **no job ever re-runs a call that already
+answered**:
+
+| how it ended | what happens to the answer |
+| --- | --- |
+| crash / restart | job resumes, transcript saved, job reads *Recovered after restart* |
+| watchdog timeout | the answer is kept and saved (the money is spent and the data is good); formatting falls back to the free timing-based assembly instead of buying another LLM call |
+| user pressed Stop | the parked result is dropped — cancel means cancel |
+| nothing parked | job is written off as *Interrupted by restart*, exactly as before |
+
 ## LLM lyric formatting
 
 Used on the **transcriber** path (audio LLMs return formatted lines themselves). The
@@ -141,6 +184,7 @@ timing integrity is guaranteed by construction. Toggle in the Models panel (`llm
 | GET | `/api/tracks/{id}` | track + transcript lines with word timings |
 | GET | `/api/tracks/{id}/audio` | stream audio |
 | GET | `/api/tracks/{id}/export?fmt=lrc\|srt\|vtt\|txt\|json` | download transcript |
+| GET | `/api/tracks/{id}/export?fmt=mp3` | download the audio with tags + lyrics embedded |
 | DELETE | `/api/tracks/{id}` | remove track and files |
 
 ## Notes on legality & reliability
@@ -158,6 +202,15 @@ timing integrity is guaranteed by construction. Toggle in the Models panel (`llm
 ✅ Auto-scroll that yields to manual scrolling for 4s
 ✅ Playback speed control (0.75–1.5×)
 ✅ One-click exports: LRC / SRT / VTT / TXT / JSON
+✅ **MP3 export** — the audio with title/artist/album, the cached cover as an APIC
+   front-cover frame, and the lyrics in **three layers** so any player shows
+   something: `SYLT` (word-level karaoke, absolute-millisecond tuples with
+   trailing-space tokens), `USLT` (plain lyrics, every timestamp and `[ti:]`
+   header stripped) and `COMM` (the raw Enhanced LRC script, so the timing
+   survives as text and can be re-imported). It always exports the **active
+   lyric version**, like every other format. An m4a/wav source is transcoded to
+   MP3 on the way out (ffmpeg); an MP3 source is tagged in place with its
+   bitrate untouched.
 ✅ **Album art hero** — cover art in the hero + library cards, fetched in order: Shazam
    fingerprints the local file, then a keyless **Deezer** search (1000×1000 covers),
    then Shazam's text search, then Genius **searched by a line of your own lyrics**
