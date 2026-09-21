@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" style="--cover-fade-ms: 2000ms">
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -156,7 +156,15 @@
        long library scroll — and because a scroll container's automatic minimum
        size is zero, it is also what lets the block shrink instead of overflowing. */
     body.side-collapsed #library {
-      width: 100%; flex: 0 1 auto; overflow-y: auto; margin-bottom: auto;
+      /* The active cover's 2px halo paints OUTSIDE the cover, and the cover sits
+         flush with #library — which is a scroll container (overflow-y: auto clips
+         the x axis too), so the halo was shaved off left and right while the 8px
+         row gaps kept its top and bottom. Grow the clip 2px each side and take
+         the same 2px back as padding: the covers keep their 40px, the column
+         still lines up with the chevron/plus/gear squares, and only the clip
+         rect — not the content — gets wider. */
+      width: calc(100% + 4px); flex: 0 1 auto; overflow-y: auto;
+      margin: 0 -2px; margin-bottom: auto; padding: 2px;
     }
     body.side-collapsed #track-list { display: flex; flex-direction: column; gap: 8px; }
     body.side-collapsed .track-card {
@@ -373,11 +381,15 @@
   .track-art .art-fetch { border-radius: 9px; }
   .track-art .art-fetch .ip-icon { width: 18px; height: 18px; }
   /* a cover arrives as a fade: this layer holds the incoming bitmap above the
-     placeholder (or above the previous cover) until it has dissolved in */
+     placeholder (or above the previous cover) until it has dissolved in.
+     Duration is a variable because the wave morph shares this one clock, and
+     LINEAR because an eased tail goes visually quiet long before its clock
+     runs out — the fade must still be visibly moving on the frame the wave
+     stops on (JS_SYNC). */
   .cover-fade {
     position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
     background-size: cover; background-position: center;
-    opacity: 0; transition: opacity 2000ms ease;
+    opacity: 0; transition: opacity var(--cover-fade-ms, 2000ms) linear;
   }
   .cover-fade.in { opacity: 1; }
   @media (prefers-reduced-motion: reduce) { .cover-fade { transition-duration: 1ms; } }
@@ -1548,13 +1560,16 @@ async function refreshLibrary() {
    — the placeholder icon, or the cover it is replacing, whose URL the server
    versions so it keeps painting the old pixels — and is only committed to the
    element once it is fully visible. */
-const COVER_FADE_MS = 2000;
 let coverSeq = 0;                       // a newer cover supersedes an in-flight fade
 
 function setCover(el, url) {
   if (!el || !url) return;
   const token = ++coverSeq;
   el.dataset.coverSeq = String(token);
+  // A newer hero fade voids the previous one's wave deadline, and the wave
+  // goes back to HOLDING: the new bitmap must decode before the dissolve (and
+  // therefore the wave) starts, so the two washes can never begin apart.
+  if (el.id === "hero-art") { heroFadeEnd = 0; heroFadePending = true; }
   const layer = document.createElement("span");
   layer.className = "cover-fade";
   layer.setAttribute("aria-hidden", "true");
@@ -1562,8 +1577,12 @@ function setCover(el, url) {
 
   const img = new Image();
   img.onload = () => {
+    if (el.id === "hero-art") heroFadePending = false;   // the hold is over
     el.appendChild(layer);
     void layer.offsetWidth;             // settle at opacity 0…
+    // the hero's dissolve is the reference the wave morph lands on; library
+    // cards run the same length but are texture, not the clock
+    if (el.id === "hero-art") syncWaveToFade(performance.now() + coverFadeMs());
     layer.classList.add("in");          // …then dissolve up to 1
     let done = false;
     const finish = () => {
@@ -1578,7 +1597,15 @@ function setCover(el, url) {
       el.style.backgroundPosition = "center";
     };
     layer.addEventListener("transitionend", finish, { once: true });
-    setTimeout(finish, COVER_FADE_MS + 90);   // in case the transition never fires
+    // in case the transition never fires; the +90 is the old breather on top
+    setTimeout(finish, coverFadeMs() + 90);
+  };
+  img.onerror = () => {
+    // art never arrives: there will be no dissolve to hold for, so let the
+    // wave run on its own clock rather than freezing on the flat line
+    if (el.id !== "hero-art") return;
+    heroFadePending = false;
+    releaseWavePending();
   };
   // a cover that will not load leaves whatever is on screen alone
   img.src = url;
@@ -1589,6 +1616,11 @@ function setCover(el, url) {
 function cancelCover(el) {
   if (!el) return;
   el.dataset.coverSeq = String(++coverSeq);
+  if (el.id === "hero-art") {
+    heroFadeEnd = 0;           // its dissolve is being cancelled
+    heroFadePending = false;   // …and any hold on the wave with it
+    releaseWavePending();      // no fade is coming: the wave runs on its own clock
+  }
   el.querySelectorAll(".cover-fade").forEach((layer) => layer.remove());
 }
 
@@ -2009,6 +2041,12 @@ function hideJobCard() {
 }
 
 function showJobCard({ status, message, candidates, trackId }) {
+  // The rail hides the job card outright, so a picker opened while the sidebar is
+  // folded is a shortlist nobody ever sees — and the one flow that opens one from
+  // the rail is right-clicking a cover, whose entire point is that shortlist. Unfold
+  // before measuring: `sidebarBelow()` reads rects, and a `display: none` panel has
+  // none, so the slide would have nothing to animate from either.
+  if ((candidates || []).length) revealPanelForPicker();
   const card = $("#job-card");
   clearSlides();
   const appearing = card.style.display === "none" || !!jobCardCloser;
@@ -3044,42 +3082,179 @@ window.addEventListener("resize", () => {
 /* waveform repaints on a timer, not the animation frame */
 setInterval(() => { if (peaks && currentData) drawWaveProgress(); }, 250);
 
-/* ---------------- waveform ---------------- */
+/* ---------------- waveform ----------------
+   The bars MORPH instead of popping: whatever is on screen — the previous
+   song's waveform, or the flat loading line laid down below — is the `from`
+   state, and the freshly computed peaks are the `to` state, washed in
+   left-to-right on a rAF loop. `peaks` during a morph IS the interpolated
+   frame, so the progress colouring (played = green) keeps working mid-morph,
+   and a second morph starting mid-flight continues from the displayed frame.
+   Peaks are cached per audio URL: the decode is the slow part, so with the
+   cache a revisit morphs between two ready endpoint shapes immediately. */
+const WAVE_BARS = 180;
+const WAVE_FLAT = new Array(WAVE_BARS).fill(0);  // drawn as the 2px baseline stubs
+/* The morph and the album-art fade are one wash: when a track loads, its bars
+   and its cover start together, run at a constant rate, and stop on the same
+   frame:
+   - START: the hero's dissolve can't begin until its bitmap decodes, so if the
+     wave's shape is ready first, the morph HOLDS (wavePending) until the
+     dissolve actually begins — the art can never start after the wave is
+     already under way;
+   - END: the hero fade's absolute finish is the morph's deadline — a morph
+     starting while the cover dissolves runs just long enough to end with it,
+     and a fade starting mid-morph stretches the morph out to its finish (see
+     syncWaveToFade). The fade is the reference; the wave bends.
+   - RATE: both are linear — the fade in CSS, the bars here. An eased tail goes
+     visually quiet long before its clock runs out (exactly the "bars finished
+     before the art" look); a constant rate keeps both visibly moving until the
+     shared final frame.
+   The cover takes its duration from the same JS constant — the CSS reads
+   --cover-fade-ms (set on <html>) — so retuning WAVE_MORPH_MS retunes the
+   fade with it. (Before they were joined, the fade ran 2000ms and the morph
+   650.) */
+const WAVE_MORPH_MS = 2000;
+const COVER_FADE_MS = WAVE_MORPH_MS;    // the cover dissolve runs on the same clock
+const WAVE_MORPH_MIN_MS = 400;  // floor for a morph compressed to a fade deadline
+function coverFadeMs() {
+  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return 1;
+  return COVER_FADE_MS;
+}
+const waveCache = new Map();   // audioUrl -> normalized peaks
+let waveAnim = null;           // {from, to, start, dur} while a morph is in flight
+let wavePending = null;        // wave target held while the hero's bitmap loads
+let waveReq = 0;               // a slow decode must not outrun a newer click
+let heroFadeEnd = 0;           // when the hero cover's dissolve finishes (0 = none)
+let heroFadePending = false;   // hero bitmap loading; its dissolve hasn't begun
+
+/* A morph slaved to a fade deadline never runs shorter than this — unless the
+   fade itself is instant (reduced motion), in which case it must be too. */
+function waveDurFor(span) {
+  const floor = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    ? 1 : WAVE_MORPH_MIN_MS;
+  return Math.max(floor, span);
+}
+
+/* The hero cover's dissolve is the beat the wave lives on: its absolute finish
+   is recorded as a deadline, and a morph that was HOLDING for it (wavePending)
+   starts right here, sized to land exactly on the fade's final frame. A morph
+   already running is retimed to end there — remaining progress is mapped onto
+   remaining time, so no bar ever moves backwards. */
+function syncWaveToFade(fadeEnd) {
+  heroFadeEnd = fadeEnd;
+  const now = performance.now();
+  if (wavePending) {
+    const to = wavePending;
+    wavePending = null;
+    const dur = waveDurFor(fadeEnd - now);
+    waveAnim = {from: peaks.slice(), to: to.slice(), start: now, dur};
+    requestAnimationFrame(waveMorphFrame);
+    return;
+  }
+  if (!waveAnim) return;
+  const span = fadeEnd - now;
+  const t = (now - waveAnim.start) / waveAnim.dur;
+  if (span <= 0 || t >= 1) return;
+  const dur = span / (1 - t);
+  waveAnim.dur = dur;
+  waveAnim.start = now - t * dur;
+}
+
+/* Let a held morph go on its own clock — used when the fade it was waiting
+   for is cancelled or fails to load, so the wave never freezes on flat. */
+function releaseWavePending() {
+  if (!wavePending) return;
+  const to = wavePending;
+  wavePending = null;
+  setWaveTarget(to);
+}
+
+function setWaveTarget(to) {
+  waveAnim = null;
+  if (peaks) {
+    // same shape already on screen (e.g. the fullscreen toggle re-runs this):
+    // nothing to animate, but repaint — the canvas geometry may have changed
+    if (peaks.length === to.length && peaks.every((v, i) => v === to[i])) {
+      drawWaveProgress();
+      return;
+    }
+    const now = performance.now();
+    // the hero's bitmap is still loading: HOLD, so the wash starts with the
+    // dissolve instead of racing ahead of it (see syncWaveToFade)
+    if (heroFadePending) { wavePending = to.slice(); return; }
+    // the hero cover dissolving in right now owns the finish line: run just
+    // long enough to land on its last tick (see syncWaveToFade)
+    const dur = heroFadeEnd > now
+      ? waveDurFor(heroFadeEnd - now)
+      : WAVE_MORPH_MS;
+    waveAnim = {from: peaks.slice(), to: to.slice(), start: now, dur};
+    requestAnimationFrame(waveMorphFrame);
+  } else {
+    peaks = to.slice();      // nothing on screen yet: lay the target down at once
+    drawWaveProgress();
+  }
+}
+
+function waveMorphFrame(now) {
+  if (!waveAnim) return;
+  const {from, to, start, dur} = waveAnim;
+  const t = Math.min(1, (now - start) / dur);
+  const n = to.length;
+  peaks = to.map((v, i) => {
+    // per-bar stagger, LINEAR: bar i starts 45%·(i/n) into the span and every
+    // race ends at t=1. Linear is the point — an eased tail goes visually
+    // quiet long before its clock runs out (the "bars finished first" look);
+    // a constant rate keeps every bar visibly moving until the shared final
+    // frame, where the fade stops too.
+    const st = (i / n) * 0.45;
+    const bt = Math.max(0, Math.min(1, (t - st) / (1 - st)));
+    return (from[i] || 0) + (v - (from[i] || 0)) * bt;
+  });
+  drawWaveProgress();
+  if (t < 1) requestAnimationFrame(waveMorphFrame);
+  else { peaks = to.slice(); waveAnim = null; }
+}
+
 async function buildWaveform() {
-  peaks = null;
-  const canvas = $("#waveform");
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const req = ++waveReq;
+  const url = currentData && currentData.audioUrl;
+  if (!url) return;
+  // first paint: nothing on screen yet, so put the flat loading line down
+  // immediately — the canvas is never blank while the audio decodes
+  if (!peaks) setWaveTarget(WAVE_FLAT);
+  const cached = waveCache.get(url);
+  if (cached) {
+    if (req === waveReq) setWaveTarget(cached);
+    return;
+  }
   try {
-    const resp = await fetch(currentData.audioUrl);
+    const resp = await fetch(url);
     const buf = await resp.arrayBuffer();
     const AC = window.AudioContext || window.webkitAudioContext;
     const actx = new AC();
     const audioBuf = await actx.decodeAudioData(buf);
     actx.close();
-    const bars = 180;
     const data = audioBuf.getChannelData(0);
-    const block = Math.floor(data.length / bars);
-    peaks = [];
-    for (let i = 0; i < bars; i++) {
+    const block = Math.floor(data.length / WAVE_BARS);
+    const raw = [];
+    for (let i = 0; i < WAVE_BARS; i++) {
       let max = 0;
       for (let j = 0; j < block; j += 40) {
         const v = Math.abs(data[i * block + j]);
         if (v > max) max = v;
       }
-      peaks.push(max);
+      raw.push(max);
     }
-    const norm = Math.max(...peaks) || 1;
-    peaks = peaks.map((p) => Math.max(0.06, p / norm));
-    drawWaveProgress();
+    const norm = Math.max(...raw) || 1;
+    const computed = raw.map((p) => Math.max(0.06, p / norm));
+    waveCache.set(url, computed);
+    if (req === waveReq) setWaveTarget(computed);
   } catch {
-    // waveform is decorative — fail silently
+    // waveform is decorative — fail silently; whatever is on screen stays
   }
 }
 
 let lastWaveW = 0;
 function drawWaveProgress() {
-  if (!peaks) return;
   const canvas = $("#waveform");
   const dpr = window.devicePixelRatio || 1;
   const w = canvas.clientWidth, h = 84;
@@ -3089,7 +3264,9 @@ function drawWaveProgress() {
     lastWaveW = w;
   }
   const ctx = canvas.getContext("2d");
+  ctx.clearRect(0, 0, w, h);   // morph frames must not smear into each other
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  if (!peaks || !peaks.length) return;   // blank allowed again
   const n = peaks.length;
   const bw = w / n;
   const progress = audio.duration ? audio.currentTime / audio.duration : 0;
@@ -3774,6 +3951,15 @@ function sideDrawerOpen() {
 // folds the header instead (see the phone block), so it is not a rail there
 function railShowing() {
   return document.body.classList.contains("side-collapsed") && sideStage() !== "phone";
+}
+/* A picker (the candidate shortlist) lives in the sidebar's job card, which the
+   rail hides entirely, so whatever opens one has to bring the sidebar back — even
+   if the user folded it away themselves — or the menu item reads as having done
+   nothing at all. Phone stages are deliberately left out: there the panel is a
+   header, not something the shortlist can vanish behind, and phones have no
+   right-click to reach those flows with. */
+function revealPanelForPicker() {
+  if (railShowing()) setSideCollapsed(false);
 }
 function setSideCollapsed(collapsed) {
   document.body.classList.toggle("side-collapsed", collapsed);
