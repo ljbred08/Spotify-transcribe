@@ -32,6 +32,31 @@ Open http://127.0.0.1:8000 — paste a URL, hit **Transcribe →**.
 > or `OPENAI_API_KEY` (or paste keys in the app — they're saved to settings).
 > Audio LLMs listen and return formatted, word-synced lyrics in one step.
 
+## Deploying to Render
+
+The repo is Render-ready: `main.py` reads `PORT`/`HOST` from the environment
+and `render.yaml` describes the whole service. To deploy:
+
+1. Fork or push this repo to your own GitHub, then on
+   [dashboard.render.com](https://dashboard.render.com) choose **New + →
+   Blueprint** and point it at the repo — `render.yaml` fills everything in.
+2. Fill the `sync: false` secrets when prompted (at least one transcription
+   key: `GEMINI_API_KEY` / `OPENROUTER_API_KEY` / `GROQ_API_KEY` /
+   `OPENAI_API_KEY`).
+3. Deploy. First build takes a few minutes (the dependency list is fully
+   pinned, so builds are reproducible).
+
+Notes:
+
+- On Render's **free** plan the disk is ephemeral — your library resets on
+  every redeploy. Attach a disk (mount `/var/data`, which is what
+  `APP_DATA_DIR` already points to) to keep tracks between deploys.
+- `ffmpeg` is preinstalled on Render's native Python runtime; nothing extra
+  is needed for audio conversion.
+- For local Windows / Python 3.14 dev, don't install from `requirements.txt`
+  verbatim — follow the Quickstart venv steps instead (they handle a
+  `shazamio` wheel quirk on that platform).
+
 ## How it works
 
 1. **Download** — Spotify URLs are resolved via **spotdl** (canonical track

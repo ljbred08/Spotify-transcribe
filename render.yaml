@@ -1,0 +1,29 @@
+# Render Blueprint — deploy Refrain with "New +" → "Blueprint" on the repo.
+#
+# Free-plan note: the filesystem is EPHEMERAL on free — tracks, transcripts
+# and cached art reset on every redeploy. Attach a paid disk (mount at
+# /var/data, already what APP_DATA_DIR points to) to persist the library.
+services:
+  - type: web
+    name: refrain
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && pip install --no-deps spotdl==4.5.2
+    startCommand: python main.py
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.6
+      - key: APP_DATA_DIR
+        value: /var/data
+      # Secrets are set in the Render dashboard, never in this file.
+      # Set at least one transcription key; the rest are optional.
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENROUTER_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GENIUS_ACCESS_TOKEN
+        sync: false
