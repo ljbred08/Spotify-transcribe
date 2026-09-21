@@ -1,5 +1,11 @@
-# Deploy pins (Render, Python 3.13 / Linux) — a freeze of the working dev
-# environment, pruned:
+# Deploy pins (Render, Linux) — a freeze of the working dev environment,
+# pruned:
+#
+# !! REQUIRES PYTHON 3.13 OR OLDER !! The pinned shazamio_core ships
+# prebuilt wheels only up to cp313; on 3.14+ pip falls back to building
+# its Rust core (maturin), which fails on hosts with a read-only cargo
+# home (Render's build sandbox, for one). On Render set
+# PYTHON_VERSION=3.13.6 — see the README's deploy section.
 #   - removed the editable self-install (`-e git+…#egg=refrain`) that freeze
 #     picked up from the local `pip install -e .` — a cloud build cannot
 #     clone the very repo it is building;

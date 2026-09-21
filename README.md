@@ -46,6 +46,16 @@ and `render.yaml` describes the whole service. To deploy:
 3. Deploy. First build takes a few minutes (the dependency list is fully
    pinned, so builds are reproducible).
 
+**Manual setup (without the blueprint):** create a Web Service pointing at
+the repo and fill in:
+
+- **Build command:** `pip install -r requirements.txt && pip install --no-deps spotdl==4.5.2`
+- **Start command:** `python main.py`
+- **Environment variable** `PYTHON_VERSION=3.13.6` — **required, not
+  optional**: the pinned `shazamio-core` ships prebuilt wheels only up to
+  Python 3.13. On a newer runtime pip tries to compile its Rust core and
+  the build dies in a read-only cargo sandbox.
+
 Notes:
 
 - On Render's **free** plan the disk is ephemeral — your library resets on
